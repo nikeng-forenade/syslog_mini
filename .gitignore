@@ -1,0 +1,11 @@
+# Runtime data
+logs/
+*.tmp
+
+# Node
+node_modules/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/

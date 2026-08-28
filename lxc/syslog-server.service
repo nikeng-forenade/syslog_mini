@@ -1,0 +1,25 @@
+[Unit]
+Description=Syslog Server (Node.js)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/syslog-server
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=3
+
+# Options (adjust as needed)
+Environment=SYSLOG_LOG_DIR=/var/log/syslog-server
+Environment=SYSLOG_UDP_PORT=514
+Environment=SYSLOG_TCP_PORT=514
+Environment=SYSLOG_HTTP_PORT=8080
+Environment=SYSLOG_RETENTION=30
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Syslog</title>
+<style>
+:root{--bg:#0f1115;--panel:#171a21;--line:#262b36;--fg:#d7dce4;--muted:#8b93a3;--accent:#3b82f6}
+*{box-sizing:border-box}body{margin:0;font:13px/1.45 system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--fg)}
+header{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+header h1{font-size:15px;margin:0}.wrap{display:grid;grid-template-columns:240px 1fr;height:calc(100vh - 44px)}
+aside{border-right:1px solid var(--line);padding:10px;overflow:auto;background:var(--panel)}
+.day{display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-radius:6px;cursor:pointer}
+.day:hover{background:#1f2530}.day.active{background:#1d2939;color:var(--accent)}.day .count{color:var(--muted);font-size:12px}
+button{background:#232a36;color:var(--fg);border:1px solid var(--line);border-radius:5px;padding:3px 8px;cursor:pointer}
+button:hover{background:#2c3542}button.danger:hover{background:#5b1f24;border-color:#7a2b31}
+main{display:flex;flex-direction:column;min-width:0}
+.filters{display:flex;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap;align-items:center}
+input,select{background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:5px;padding:5px 8px}
+.table{flex:1;overflow:auto}table{width:100%;border-collapse:collapse}
+th{position:sticky;top:0;background:var(--panel);text-align:left;padding:6px 10px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--line)}
+td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover td{background:#141922}
+.sev{display:inline-block;padding:1px 6px;border-radius:4px;font-size:11px;font-weight:600;color:#fff}
+.emerg,.alert,.crit{background:#b91c1c}.err{background:#dc2626}.warning{background:#d97706}
+.notice{background:#2563eb}.info{background:#4b5563}.debug{background:#374151}
+.msg{white-space:pre-wrap;word-break:break-word}.del{opacity:.4}tr:hover .del{opacity:1}
+.muted{color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <h1>📟 Syslog</h1>
+  <span id="status" class="muted">…</span>
+  <div style="flex:1"></div>
+  <label class="muted"><input type="checkbox" id="autorefresh" checked> auto</label>
+  <button id="refresh">Refresh</button>
+</header>
+<div class="wrap">
+  <aside>
+    <div style="margin-bottom:8px" class="muted">Log days</div>
+    <div id="days"></div>
+  </aside>
+  <main>
+    <div class="filters">
+      <input id="q" placeholder="search…">
+      <select id="sev">
+        <option value="">all levels</option><option>emerg</option><option>alert</option>
+        <option>crit</option><option>err</option><option>warning</option><option>notice</option>
+        <option>info</option><option>debug</option>
+      </select>
+      <input id="host" placeholder="host…">
+      <span id="total" class="muted"></span>
+    </div>
+    <div class="table">
+      <table>
+        <thead><tr><th>Time</th><th>Host</th><th>Level</th><th>Tag</th><th>Message</th><th></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </main>
+</div>
+<script>
+const $ = (s) => document.querySelector(s);
+let current = '', timer = null;
+const api = async (p, o) => { const r = await fetch(p, o); if (!r.ok) throw new Error(await r.text()); return r.json(); };
+const esc = (s) => s.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function loadDays() {
+  api('/api/days').then(({ days }) => {
+    $('#days').innerHTML = days.map((d) => `
+      <div class="day ${d.date === current ? 'active' : ''}" data-date="${d.date}">
+        <span>${d.date} <span class="count">(${d.count})</span></span>
+        <button class="del danger" title="delete this day"
+          onclick="event.stopPropagation();delDay('${d.date}')">🗑</button>
+      </div>`).join('') || '<div class="muted">no logs yet</div>';
+    document.querySelectorAll('.day').forEach((el) =>
+      el.addEventListener('click', () => { current = el.dataset.date; refresh(); loadDays(); }));
+  }).catch(() => { $('#status').textContent = 'server unreachable'; });
+}
+
+function delDay(date) {
+  if (!confirm(`Delete all logs for ${date}?`)) return;
+  api(`/api/logs?date=${date}`, { method: 'DELETE' }).then(() => {
+    if (current === date) { current = ''; $('#rows').innerHTML = ''; }
+    loadDays();
+  });
+}
+
+function delEntry(id) {
+  if (!confirm('Delete this entry?')) return;
+  api(`/api/entry?date=${current}&id=${id}`, { method: 'DELETE' }).then(() => refresh());
+}
+
+function refresh() {
+  if (!current) { $('#rows').innerHTML = '<tr><td colspan="6" class="muted">select a day</td></tr>'; return; }
+  const qs = new URLSearchParams({ date: current, limit: 500 });
+  if ($('#q').value) qs.set('q', $('#q').value);
+  if ($('#sev').value) qs.set('severity', $('#sev').value);
+  if ($('#host').value) qs.set('host', $('#host').value);
+  api('/api/logs?' + qs).then(({ logs, total }) => {
+    $('#total').textContent = `${total} entries`;
+    $('#rows').innerHTML = logs.map((e) => `
+      <tr>
+        <td class="muted">${new Date(e.ts).toLocaleString()}</td>
+        <td>${esc(e.host)}</td>
+        <td><span class="sev ${e.severity}">${e.severity}</span></td>
+        <td class="muted">${esc(e.tag)}</td>
+        <td class="msg">${esc(e.msg)}</td>
+        <td><button class="del danger" onclick="delEntry('${e.id}')">✕</button></td>
+      </tr>`).join('') || '<tr><td colspan="6" class="muted">no matching entries</td></tr>';
+  }).catch(() => {});
+}
+
+$('#refresh').onclick = () => { refresh(); loadDays(); };
+$('#autorefresh').onchange = () => {
+  clearInterval(timer);
+  if ($('#autorefresh').checked) timer = setInterval(() => { loadDays(); refresh(); }, 5000);
+};
+['#q', '#sev', '#host'].forEach((s) => $(s).addEventListener('input', refresh));
+fetch('/api/health').then(() => { $('#status').textContent = '● online'; }).catch(() => {});
+loadDays();
+timer = setInterval(() => { loadDays(); refresh(); }, 5000);
+</script>
+</body>
+</html>

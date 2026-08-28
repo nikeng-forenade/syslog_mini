@@ -1,0 +1,17 @@
+[Unit]
+Description=Syslog Server (Node.js)
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/syslog-server
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=3
+Environment=SYSLOG_LOG_DIR=/var/log/syslog-server
+Environment=SYSLOG_HTTP_PORT=8080
+Environment=SYSLOG_RETENTION=30
+# Only needed if running as a non-root user (port 514 < 1024):
+# AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
