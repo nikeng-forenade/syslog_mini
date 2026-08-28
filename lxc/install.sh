@@ -47,6 +47,13 @@ echo "Log dir:     $LOG_DIR"
 echo "Retention:   $RETENTION days"
 echo ""
 
+# ── Ensure DNS works (fixes 'Temporary failure resolving' in LXC) ──
+if ! getent hosts deb.debian.org >/dev/null 2>&1; then
+  echo "DNS resolution failing — injecting public nameservers..."
+  cp /etc/resolv.conf /etc/resolv.conf.bak 2>/dev/null || true
+  printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/resolv.conf
+fi
+
 # ── Update system ──────────────────────────────────────────
 apt-get update && apt-get upgrade -y
 

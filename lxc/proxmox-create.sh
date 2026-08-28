@@ -120,6 +120,25 @@ echo "IP:       $IP"
 [[ -n "$INSTALL_OPTS" ]] && echo "Options:  $INSTALL_OPTS"
 echo ""
 
+# ── Host DNS pre-check (template downloads + container apt need DNS) ──
+if ! getent hosts deb.debian.org >/dev/null 2>&1; then
+  echo "⚠️  DNS resolution is failing on this Proxmox host (deb.debian.org not resolving)."
+  echo "    Template download and the in-container apt install will fail."
+  echo "    Quick fix:"
+  echo "      cp /etc/resolv.conf /etc/resolv.conf.bak"
+  echo "      echo 'nameserver 1.1.1.1' > /etc/resolv.conf"
+  echo "      echo 'nameserver 8.8.8.8' >> /etc/resolv.conf"
+  read -r -p "    Fix DNS now and continue? (y/N): " FIX_DNS
+  if [[ "$FIX_DNS" =~ ^[Yy]$ ]]; then
+    cp /etc/resolv.conf /etc/resolv.conf.bak 2>/dev/null || true
+    printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/resolv.conf
+    getent hosts deb.debian.org >/dev/null 2>&1 && echo "✅ DNS is working now." || echo "⚠️  DNS still failing — check your network."
+  else
+    echo "Aborting (DNS is required for template + package downloads)."
+    exit 1
+  fi
+fi
+
 # ── Find template storage (must be directory type, not LVM-thin) ─
 TEMPLATE_STORAGE="local"
 for s in local "$STORAGE"; do
