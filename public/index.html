@@ -133,7 +133,7 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
 </div>
 <script>
 const $ = (s) => document.querySelector(s);
-let current = '', timer = null, daysData = [], sevFilter = '';
+let current = 'all', timer = null, daysData = [], sevFilter = '';
 const api = async (p, o) => { const r = await fetch(p, o); if (!r.ok) throw new Error(await r.text()); return r.json(); };
 const esc = (s) => s.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmtSize = (b) => b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB' : b >= 1e6 ? (b / 1e6).toFixed(2) + ' MB' : b >= 1e3 ? (b / 1e3).toFixed(1) + ' KB' : b + ' B';
@@ -144,13 +144,14 @@ function loadDays() {
     const totalCount = days.reduce((s, d) => s + d.count, 0);
     const totalSize = days.reduce((s, d) => s + d.size, 0);
     $('#days').innerHTML =
-      (days.length ? `<div class="day" style="cursor:default;font-weight:600"><span>Total</span><span class="count">${totalCount} · ${fmtSize(totalSize)}</span></div><div style="height:1px;background:var(--line);margin:6px 0"></div>` : '') +
+      `<div class="day ${current === 'all' ? 'active' : ''}" data-date="all" title="All hosts, all days"><span>All logs</span><span class="count">${totalCount} · ${fmtSize(totalSize)}</span></div>` +
+      (days.length ? '<div style="height:1px;background:var(--line);margin:6px 0"></div>' : '') +
       days.map((d) => `
       <div class="day ${d.date === current ? 'active' : ''}" data-date="${d.date}">
         <span>${d.date} <span class="count">(${d.count} · ${fmtSize(d.size)})</span></span>
         <button class="del danger" title="delete this day"
           onclick="event.stopPropagation();delDay('${d.date}')">🗑</button>
-      </div>`).join('') || '<div class="muted">no logs yet</div>';
+      </div>`).join('');
     document.querySelectorAll('.day').forEach((el) =>
       el.addEventListener('click', () => { current = el.dataset.date; refresh(); loadDays(); }));
   }).catch(() => setStatus(false));
@@ -164,9 +165,9 @@ function delDay(date) {
   });
 }
 
-function delEntry(id) {
+function delEntry(date, id) {
   if (!confirm('Delete this entry?')) return;
-  api(`/api/entry?date=${current}&id=${id}`, { method: 'DELETE' }).then(() => {
+  api(`/api/entry?date=${date}&id=${id}`, { method: 'DELETE' }).then(() => {
     loadDays().then(() => refresh());
   });
 }
@@ -182,14 +183,20 @@ function refresh() {
     $('#total').textContent = '';
     return;
   }
-  const qs = new URLSearchParams({ date: current, limit: 500 });
+  const qs = new URLSearchParams({ limit: 500 });
+  if (current !== 'all') qs.set('date', current);
   if ($('#q').value) qs.set('q', $('#q').value);
   if (sevFilter) qs.set('severity', sevFilter);
   if ($('#host').value) qs.set('host', $('#host').value);
   qs.set('order', $('#order').value);
   api('/api/logs?' + qs).then(({ logs, total }) => {
-    const day = daysData.find((d) => d.date === current);
-    $('#total').textContent = day ? `${total} entries · ${fmtSize(day.size)}` : `${total} entries`;
+    const totalSize = daysData.reduce((s, d) => s + d.size, 0);
+    if (current === 'all') {
+      $('#total').textContent = `${total} matching · ${fmtSize(totalSize)} total`;
+    } else {
+      const day = daysData.find((d) => d.date === current);
+      $('#total').textContent = day ? `${total} entries · ${fmtSize(day.size)}` : `${total} entries`;
+    }
     $('#rows').innerHTML = logs.map((e) => `
       <tr>
         <td class="muted">${new Date(e.ts).toLocaleString()}</td>
@@ -197,7 +204,7 @@ function refresh() {
         <td><span class="sev ${e.severity}">${e.severity}</span></td>
         <td class="muted">${esc(e.tag)}</td>
         <td class="msg">${esc(e.msg)}</td>
-        <td><button class="del danger" onclick="delEntry('${e.id}')">✕</button></td>
+        <td><button class="del danger" onclick="delEntry('${e.ts.slice(0, 10)}','${e.id}')">✕</button></td>
       </tr>`).join('') || '<tr><td colspan="6" class="muted">no matching entries</td></tr>';
   }).catch(() => {});
 }

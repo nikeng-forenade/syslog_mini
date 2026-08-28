@@ -25,7 +25,7 @@ const readline  = require('readline');
 const crypto    = require('crypto');
 const { execFile, exec } = require('child_process');
 
-const VERSION = '1.3.1'; // bump on every release; shown in the GUI header
+const VERSION = '1.4.0'; // bump on every release; shown in the GUI header
 
 const HOST      = process.env.SYSLOG_HOST       || '0.0.0.0';
 const UDP_PORT  = Number(process.env.SYSLOG_UDP_PORT  || 514);
@@ -341,20 +341,29 @@ function pruneBackups() {
 }
 
 async function readLogs(date, { q, host, severity, limit, offset, order }) {
-  if (!fs.existsSync(fileOf(date))) return { total: 0, logs: [] };
-  const out = []; let total = 0;
-  const rl = readline.createInterface({ input: fs.createReadStream(fileOf(date)), crlfDelay: Infinity });
-  for await (const line of rl) {
-    if (!line.trim()) continue;
-    let e; try { e = JSON.parse(line); } catch { continue; }
-    if (q && !(e.msg + ' ' + e.tag).toLowerCase().includes(q.toLowerCase())) continue;
-    if (host && e.host !== host) continue;
-    if (severity && !severity.split(',').includes(e.severity)) continue;
-    total++;
-    if (total > offset && out.length < limit) out.push(e);
+  let files = [];
+  if (date === 'all') {
+    try { files = fs.readdirSync(LOG_DIR).filter((f) => f.endsWith('.jsonl')).sort(); } catch {}
+  } else {
+    files = [path.basename(fileOf(date))];
   }
-  if (order === 'desc') out.reverse();
-  return { total, logs: out };
+  const all = [];
+  for (const f of files) {
+    const fp = path.join(LOG_DIR, f);
+    if (!fs.existsSync(fp)) continue;
+    const rl = readline.createInterface({ input: fs.createReadStream(fp), crlfDelay: Infinity });
+    for await (const line of rl) {
+      if (!line.trim()) continue;
+      let e; try { e = JSON.parse(line); } catch { continue; }
+      if (q && !(e.msg + ' ' + e.tag).toLowerCase().includes(q.toLowerCase())) continue;
+      if (host && e.host !== host) continue;
+      if (severity && !severity.split(',').includes(e.severity)) continue;
+      all.push(e);
+    }
+  }
+  const t = (e) => { const n = new Date(e.ts).getTime(); return Number.isFinite(n) ? n : 0; };
+  all.sort((a, b) => (order === 'desc' ? t(b) - t(a) : t(a) - t(b)));
+  return { total: all.length, logs: all.slice(offset, offset + limit) };
 }
 
 // ── CSV export ─────────────────────────────────────────────
@@ -372,8 +381,16 @@ async function exportLogsCsv(res, date, { q, host, severity, order }) {
   });
   res.write('\uFEFF'); // UTF-8 BOM so Excel opens it correctly
   const rows = [];
-  if (fs.existsSync(fileOf(date))) {
-    const rl = readline.createInterface({ input: fs.createReadStream(fileOf(date)), crlfDelay: Infinity });
+  let files = [];
+  if (date === 'all') {
+    try { files = fs.readdirSync(LOG_DIR).filter((f) => f.endsWith('.jsonl')).sort(); } catch {}
+  } else {
+    files = [path.basename(fileOf(date))];
+  }
+  for (const f of files) {
+    const fp = path.join(LOG_DIR, f);
+    if (!fs.existsSync(fp)) continue;
+    const rl = readline.createInterface({ input: fs.createReadStream(fp), crlfDelay: Infinity });
     for await (const line of rl) {
       if (!line.trim()) continue;
       let e; try { e = JSON.parse(line); } catch { continue; }
@@ -448,7 +465,7 @@ http.createServer(async (req, res) => {
       return sendJSON(res, 200, { days });
     }
     if (p === '/api/logs' && req.method === 'GET') {
-      const date = s.get('date') || dateStr();
+      const date = s.get('date') || 'all';
       const r = await readLogs(date, {
         q: s.get('q') || '', host: s.get('host') || '', severity: s.get('severity') || '',
         limit: Math.min(Number(s.get('limit') || 500), 5000), offset: Number(s.get('offset') || 0),
@@ -456,7 +473,7 @@ http.createServer(async (req, res) => {
       return sendJSON(res, 200, { date, ...r });
     }
     if (p === '/api/export') {
-      const date = s.get('date') || dateStr();
+      const date = s.get('date') || 'all';
       return exportLogsCsv(res, date, {
         q: s.get('q') || '', host: s.get('host') || '', severity: s.get('severity') || '',
         order: s.get('order') === 'desc' ? 'desc' : 'asc' });
