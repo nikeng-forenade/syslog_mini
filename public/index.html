@@ -44,6 +44,8 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
 .host-row .host-name{flex:1;min-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .host-row input[type=number]{width:74px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:5px;padding:4px 6px}
 .host-row .hint{color:var(--muted);font-size:11px}
+.backup-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #1b202a;flex-wrap:wrap}
+.backup-row .hint{color:var(--muted);font-size:11px}
 .muted{color:var(--muted)}
 </style>
 </head>
@@ -55,6 +57,7 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
   <span id="ver" class="muted" title="Server version">…</span>
   <div style="flex:1"></div>
   <label class="muted"><input type="checkbox" id="autorefresh" checked> auto</label>
+  <button id="backupsBtn" title="Manage backups">🗄</button>
   <button id="refresh">Refresh</button>
 </header>
 <div class="wrap">
@@ -98,6 +101,24 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
     </div>
     <div class="modal-body" id="hostsList"></div>
     <div class="modal-footer muted">0 or ↺ = server defaults (60s data · 60s ping) · changes apply immediately</div>
+  </div>
+</div>
+<div class="modal-overlay" id="backupsModal" style="display:none">
+  <div class="modal">
+    <div class="modal-header">🗄 Backups — restore or delete
+      <button id="closeBackups">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="backup-row">
+        <label class="hint">Keep</label>
+        <input type="number" id="backupKeep" min="0" max="50" value="3" style="width:70px">
+        <button id="saveKeep">Save</button>
+        <span style="flex:1"></span>
+        <button id="deleteAllBackups" class="danger">Delete all</button>
+      </div>
+      <div id="backupsList"></div>
+    </div>
+    <div class="modal-footer muted">Restore copies the files back and restarts the service · Delete is permanent</div>
   </div>
 </div>
 <script>
@@ -275,6 +296,57 @@ $('#hostsList').addEventListener('click', (e) => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ host, onlineMs, pingMs, ping: pingEl ? pingEl.checked : undefined }),
   }).then((r) => r.ok ? openHostsModal() : alert('Save failed'));
+});
+
+function openBackupsModal() {
+  const modal = $('#backupsModal');
+  modal.style.display = 'flex';
+  fetch('/api/backups', { cache: 'no-store' })
+    .then((r) => r.ok ? r.json() : Promise.reject())
+    .then(({ backups, keep }) => {
+      $('#backupKeep').value = keep;
+      $('#backupsList').innerHTML = backups.length ? backups.map((b) => `
+        <div class="backup-row" data-name="${esc(b.name)}">
+          <span class="host-name">${esc(b.name)}</span>
+          <span class="hint">${fmtSize(b.size)}</span>
+          <span style="flex:1"></span>
+          <button data-action="restore">Restore</button>
+          <button data-action="delete" class="danger">Delete</button>
+        </div>`).join('') : '<div class="muted">no backups yet</div>';
+    })
+    .catch(() => { $('#backupsList').innerHTML = '<div class="muted">unreachable</div>'; });
+}
+
+$('#backupsBtn').onclick = openBackupsModal;
+$('#closeBackups').onclick = () => { $('#backupsModal').style.display = 'none'; };
+$('#backupsModal').addEventListener('click', (e) => {
+  if (e.target === $('#backupsModal')) $('#backupsModal').style.display = 'none';
+});
+$('#saveKeep').onclick = () => {
+  const keep = Number($('#backupKeep').value);
+  fetch('/api/backups/keep', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keep }),
+  }).then((r) => r.ok ? openBackupsModal() : alert('Save failed'));
+};
+$('#deleteAllBackups').onclick = () => {
+  if (!confirm('Delete ALL backups? This is permanent.')) return;
+  fetch('/api/backups/all', { method: 'DELETE' }).then((r) => r.ok ? openBackupsModal() : alert('Delete failed'));
+};
+$('#backupsList').addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  const row = btn.closest('.backup-row');
+  const name = row.dataset.name;
+  if (btn.dataset.action === 'restore') {
+    if (!confirm(`Restore backup ${name}? The service will restart.`)) return;
+    fetch('/api/backups/restore', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }),
+    }).then((r) => r.ok ? alert('Restored! The service is restarting.') : alert('Restore failed'));
+  } else {
+    if (!confirm(`Delete backup ${name}?`)) return;
+    fetch('/api/backups?name=' + encodeURIComponent(name), { method: 'DELETE' })
+      .then((r) => r.ok ? openBackupsModal() : alert('Delete failed'));
+  }
 });
 
 checkHealth();

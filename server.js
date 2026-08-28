@@ -22,7 +22,7 @@ const fsp       = fs.promises;
 const path      = require('path');
 const readline  = require('readline');
 const crypto    = require('crypto');
-const { execFile } = require('child_process');
+const { execFile, exec } = require('child_process');
 
 const VERSION = '1.0.0'; // bump on every release; shown in the GUI header
 
@@ -244,6 +244,45 @@ function readBody(req) {
   });
 }
 
+// ---------- backups ----------
+const APP_DIR = process.env.SYSLOG_APP_DIR || __dirname;
+const BACKUP_DIR = path.join(APP_DIR, 'backups');
+const SETTINGS_FILE = path.join(APP_DIR, 'settings.json');
+let backupKeep = Number(process.env.SYSLOG_BACKUP_KEEP || 3);
+
+function loadSettings() {
+  try {
+    const s = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+    if (Number.isFinite(Number(s.backupKeep)) && Number(s.backupKeep) >= 0) backupKeep = Math.min(Number(s.backupKeep), 50);
+  } catch {}
+}
+
+function saveSettings() {
+  try { fs.writeFileSync(SETTINGS_FILE, JSON.stringify({ backupKeep }, null, 2)); } catch {}
+}
+
+function dirSize(dir) {
+  let total = 0;
+  try { for (const f of fs.readdirSync(dir)) { const st = fs.statSync(path.join(dir, f)); if (st.isFile()) total += st.size; } } catch {}
+  return total;
+}
+
+function listBackups() {
+  if (!fs.existsSync(BACKUP_DIR)) return [];
+  return fs.readdirSync(BACKUP_DIR, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => ({ name: d.name, size: dirSize(path.join(BACKUP_DIR, d.name)) }))
+    .sort((a, b) => b.name.localeCompare(a.name));
+}
+
+function pruneBackups() {
+  if (backupKeep <= 0 || !fs.existsSync(BACKUP_DIR)) return;
+  const dirs = fs.readdirSync(BACKUP_DIR)
+    .filter((n) => { try { return fs.statSync(path.join(BACKUP_DIR, n)).isDirectory(); } catch { return false; } })
+    .sort();
+  while (dirs.length > backupKeep) { const oldest = dirs.shift(); try { fs.rmSync(path.join(BACKUP_DIR, oldest), { recursive: true, force: true }); } catch {} }
+}
+
 async function readLogs(date, { q, host, severity, limit, offset, order }) {
   if (!fs.existsSync(fileOf(date))) return { total: 0, logs: [] };
   const out = []; let total = 0;
@@ -397,6 +436,40 @@ http.createServer(async (req, res) => {
       saveHostConfigs();
       return sendJSON(res, 200, { ok: true, host: body.host, onlineMs: onlineMs || null, pingMs: pingMs || null, ping });
     }
+    if (p === '/api/backups' && req.method === 'GET') {
+      return sendJSON(res, 200, { backups: listBackups(), keep: backupKeep });
+    }
+    if (p === '/api/backups' && req.method === 'DELETE') {
+      const name = path.basename(s.get('name') || '');
+      const target = path.join(BACKUP_DIR, name);
+      if (!name || !target.startsWith(BACKUP_DIR)) return sendJSON(res, 400, { error: 'invalid backup name' });
+      await fsp.rm(target, { recursive: true, force: true });
+      return sendJSON(res, 200, { ok: true });
+    }
+    if (p === '/api/backups/all' && req.method === 'DELETE') {
+      await fsp.rm(BACKUP_DIR, { recursive: true, force: true });
+      return sendJSON(res, 200, { ok: true });
+    }
+    if (p === '/api/backups/keep' && req.method === 'PUT') {
+      const body = await readBody(req);
+      const k = Number(body.keep);
+      if (!Number.isFinite(k) || k < 0) return sendJSON(res, 400, { error: 'keep >= 0 required' });
+      backupKeep = Math.min(k, 50);
+      saveSettings();
+      pruneBackups();
+      return sendJSON(res, 200, { ok: true, keep: backupKeep });
+    }
+    if (p === '/api/backups/restore' && req.method === 'POST') {
+      const body = await readBody(req);
+      const name = path.basename(body.name || '');
+      const src = path.join(BACKUP_DIR, name);
+      if (!name || !src.startsWith(BACKUP_DIR) || !fs.existsSync(src)) return sendJSON(res, 404, { error: 'backup not found' });
+      const restored = [];
+      if (fs.existsSync(path.join(src, 'server.js'))) { await fsp.copyFile(path.join(src, 'server.js'), path.join(APP_DIR, 'server.js')); restored.push('server.js'); }
+      if (fs.existsSync(path.join(src, 'index.html'))) { await fsp.copyFile(path.join(src, 'index.html'), path.join(APP_DIR, 'public', 'index.html')); restored.push('index.html'); }
+      setTimeout(() => { try { exec('systemctl restart syslog-server', () => {}); } catch {} }, 400);
+      return sendJSON(res, 200, { ok: true, restored, restarting: true });
+    }
     return serveStatic(res, p);
   } catch (e) { console.error(e); sendJSON(res, 500, { error: e.message }); }
 }).listen(HTTP_PORT, HTTP_HOST, () => {
@@ -407,6 +480,7 @@ http.createServer(async (req, res) => {
 
 scan().then(() => console.log('indexed existing days:', [...dayStats.keys()].join(', ') || '(none)'));
 loadHostConfigs();
+loadSettings();
 if (PING_ENABLED) {
   pingLoop().catch(() => {});
   setInterval(() => { pingLoop().catch(() => {}); }, PING_INTERVAL_MS).unref();

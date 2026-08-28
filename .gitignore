@@ -1,5 +1,7 @@
 # Runtime data
 logs/
+backups/
+settings.json
 *.tmp
 
 # Node

@@ -48,6 +48,11 @@ cp "$APP_DIR/public/index.html" "$BACKUP/index.html"
 echo "Backed up current version to $BACKUP"
 
 # ── Prune old backups (keep newest $BACKUP_KEEP) ───────────
+# Honor the keep-count set from the GUI (settings.json)
+[ -f "$APP_DIR/settings.json" ] && {
+  KEEP_FILE=$(grep -oP '"backupKeep":\s*\K[0-9]+' "$APP_DIR/settings.json" | head -1)
+  [ -n "$KEEP_FILE" ] && BACKUP_KEEP="$KEEP_FILE"
+}
 PRUNED=0
 if [ -d "$APP_DIR/backups" ] && [ "$BACKUP_KEEP" -gt 0 ] 2>/dev/null; then
   while [ "$(ls -1 "$APP_DIR/backups" | wc -l)" -gt "$BACKUP_KEEP" ]; do
