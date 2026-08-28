@@ -237,6 +237,11 @@ http.createServer(async (req, res) => {
       return exportLogsCsv(res, date, {
         q: s.get('q') || '', host: s.get('host') || '', severity: s.get('severity') || '' });
     }
+    if (p === '/api/logs/all' && req.method === 'DELETE') {
+      for (const [date] of dayStats) await fsp.unlink(fileOf(date)).catch(() => {});
+      dayStats.clear();
+      return sendJSON(res, 200, { ok: true, deleted: 'all' });
+    }
     if (p === '/api/logs' && req.method === 'DELETE') {
       const date = s.get('date');
       await fsp.unlink(fileOf(date)).catch(() => {});

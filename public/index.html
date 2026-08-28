@@ -24,6 +24,7 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
 .emerg,.alert,.crit{background:#b91c1c}.err{background:#dc2626}.warning{background:#d97706}
 .notice{background:#2563eb}.info{background:#4b5563}.debug{background:#374151}
 .msg{white-space:pre-wrap;word-break:break-word}.del{opacity:.4}tr:hover .del{opacity:1}
+.day .del{opacity:.9;padding:2px 6px;font-size:12px}.day:hover .del{opacity:1}
 .muted{color:var(--muted)}
 </style>
 </head>
@@ -37,7 +38,9 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
 </header>
 <div class="wrap">
   <aside>
-    <div style="margin-bottom:8px" class="muted">Log days</div>
+    <div style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center" class="muted">Log days
+      <button id="delAll" class="danger" title="Delete all logs">Delete all</button>
+    </div>
     <div id="days"></div>
   </aside>
   <main>
@@ -120,6 +123,14 @@ function refresh() {
 }
 
 $('#refresh').onclick = () => { refresh(); loadDays(); };
+$('#delAll').onclick = () => {
+  if (!daysData.length) return;
+  const n = daysData.reduce((s, d) => s + d.count, 0);
+  if (!confirm(`Delete ALL logs? (${n} entries across ${daysData.length} day(s))`)) return;
+  api('/api/logs/all', { method: 'DELETE' }).then(() => {
+    current = ''; $('#rows').innerHTML = ''; loadDays(); refresh();
+  }).catch((e) => alert('Delete failed: ' + e.message));
+};
 $('#export').onclick = () => {
   if (!current) return;
   const qs = new URLSearchParams({ date: current });
