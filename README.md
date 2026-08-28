@@ -36,6 +36,7 @@ logger -n 127.0.0.1 -T -P 514 -p user.warning "tcp test"
 | `SYSLOG_HTTP_PORT`  | `8080`      | GUI / API port                                 |
 | `SYSLOG_LOG_DIR`    | `./logs`    | Where daily `.jsonl` files are stored          |
 | `SYSLOG_RETENTION`  | `0`         | Auto-delete days older than N (0 = keep all)   |
+| `SYSLOG_DISK_WARN_PCT` | `5`      | Log an `err` entry when free disk drops below N% |
 
 ## REST API
 

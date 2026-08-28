@@ -20,6 +20,7 @@ const net       = require('net');
 const fs        = require('fs');
 const fsp       = fs.promises;
 const path      = require('path');
+const os        = require('os');
 const readline  = require('readline');
 const crypto    = require('crypto');
 const { execFile, exec } = require('child_process');
@@ -60,6 +61,43 @@ function append(date, line) {
   appendQ.set(date, next);
   next.finally(() => { if (appendQ.get(date) === next) appendQ.delete(date); });
   return next;
+}
+
+// ---------- self-monitoring (disk full warning) ----------
+const DISK_WARN_PCT = Number(process.env.SYSLOG_DISK_WARN_PCT || 5); // % free that triggers an err entry
+let diskLow = false;
+
+function logSelf(severity, msg) {
+  append(dateStr(), JSON.stringify({
+    id: crypto.createHash('sha1').update(`${Date.now()}:${Math.random()}`).digest('hex').slice(0, 12),
+    ts: new Date().toISOString(),
+    host: os.hostname(),
+    facility: 'syslog',
+    severity,
+    tag: 'syslog',
+    msg
+  }));
+}
+
+function diskFreePct() {
+  try {
+    const s = fs.statfsSync(LOG_DIR);
+    const total = s.blocks * s.bsize;
+    return total ? (s.bavail * s.bsize) / total * 100 : 100;
+  } catch { return 100; }
+}
+
+function checkDisk() {
+  const pct = diskFreePct();
+  if (pct < DISK_WARN_PCT && !diskLow) {
+    diskLow = true;
+    logSelf('err', `DISK ALMOST FULL: only ${pct.toFixed(1)}% disk space free`);
+    console.error(`[syslog] disk almost full: ${pct.toFixed(1)}% free`);
+  } else if (pct >= DISK_WARN_PCT && diskLow) {
+    diskLow = false;
+    logSelf('info', `Disk space OK: ${pct.toFixed(1)}% free`);
+    console.log(`[syslog] disk recovered: ${pct.toFixed(1)}% free`);
+  }
 }
 
 // ---------- parsing (RFC 3164 + RFC 5424) ----------
@@ -505,7 +543,9 @@ http.createServer(async (req, res) => {
 }).listen(HTTP_PORT, HTTP_HOST, () => {
   console.log(`syslog up — UDP/TCP :${UDP_PORT}/${TCP_PORT}, GUI http://${HTTP_HOST}:${HTTP_PORT}, dir ${LOG_DIR}`);
   sweep();
+  checkDisk();
   setInterval(() => { sweep(); pruneHosts(); }, 3600e3).unref();
+  setInterval(() => { checkDisk(); }, 15 * 60e3).unref();
 });
 
 scan().then(() => console.log('indexed existing days:', [...dayStats.keys()].join(', ') || '(none)'));
