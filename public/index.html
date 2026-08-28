@@ -77,7 +77,7 @@ const esc = (s) => s.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&g
 const fmtSize = (b) => b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB' : b >= 1e6 ? (b / 1e6).toFixed(2) + ' MB' : b >= 1e3 ? (b / 1e3).toFixed(1) + ' KB' : b + ' B';
 
 function loadDays() {
-  api('/api/days').then(({ days }) => {
+  return api('/api/days').then(({ days }) => {
     daysData = days;
     const totalCount = days.reduce((s, d) => s + d.count, 0);
     const totalSize = days.reduce((s, d) => s + d.size, 0);
@@ -97,18 +97,24 @@ function loadDays() {
 function delDay(date) {
   if (!confirm(`Delete all logs for ${date}?`)) return;
   api(`/api/logs?date=${date}`, { method: 'DELETE' }).then(() => {
-    if (current === date) { current = ''; $('#rows').innerHTML = ''; }
-    loadDays();
+    if (current === date) { current = ''; }
+    loadDays().then(() => refresh());
   });
 }
 
 function delEntry(id) {
   if (!confirm('Delete this entry?')) return;
-  api(`/api/entry?date=${current}&id=${id}`, { method: 'DELETE' }).then(() => refresh());
+  api(`/api/entry?date=${current}&id=${id}`, { method: 'DELETE' }).then(() => {
+    loadDays().then(() => refresh());
+  });
 }
 
 function refresh() {
-  if (!current) { $('#rows').innerHTML = '<tr><td colspan="6" class="muted">select a day</td></tr>'; return; }
+  if (!current) {
+    $('#rows').innerHTML = '<tr><td colspan="6" class="muted">select a day</td></tr>';
+    $('#total').textContent = '';
+    return;
+  }
   const qs = new URLSearchParams({ date: current, limit: 500 });
   if ($('#q').value) qs.set('q', $('#q').value);
   if ($('#sev').value) qs.set('severity', $('#sev').value);
