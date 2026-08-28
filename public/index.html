@@ -28,6 +28,8 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.25}}
 #status.online{color:#22c55e;animation:blink 1.2s ease-in-out infinite;font-weight:600}
 #status.offline{color:#ef4444;animation:blink .8s ease-in-out infinite;font-weight:600}
+.online-dot{color:#22c55e}.offline-dot{color:#ef4444}
+#hosts{font-variant-numeric:tabular-nums}
 .muted{color:var(--muted)}
 </style>
 </head>
@@ -35,6 +37,7 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
 <header>
   <h1>📟 Syslog</h1>
   <span id="status" class="muted">…</span>
+  <span id="hosts" class="muted" title="Known syslog sources">…</span>
   <div style="flex:1"></div>
   <label class="muted"><input type="checkbox" id="autorefresh" checked> auto</label>
   <button id="refresh">Refresh</button>
@@ -157,9 +160,20 @@ function checkHealth() {
     .then((r) => setStatus(r.ok))
     .catch(() => setStatus(false));
 }
+function loadHosts() {
+  fetch('/api/hosts', { cache: 'no-store' })
+    .then((r) => r.ok ? r.json() : Promise.reject())
+    .then(({ onlineCount, offlineCount }) => {
+      $('#hosts').innerHTML =
+        `<span class="online-dot">●</span> ${onlineCount}&nbsp; ` +
+        `<span class="offline-dot">●</span> ${offlineCount}`;
+    })
+    .catch(() => { $('#hosts').textContent = '—'; });
+}
 checkHealth();
+loadHosts();
 loadDays();
-timer = setInterval(() => { loadDays(); refresh(); checkHealth(); }, 5000);
+timer = setInterval(() => { loadDays(); refresh(); checkHealth(); loadHosts(); }, 5000);
 </script>
 </body>
 </html>

@@ -95,11 +95,42 @@ function parse(buf, rinfo) {
   };
 }
 
-const store = (entry) => append(dateStr(new Date(entry.ts)), JSON.stringify(entry));
+// ---------- host tracking (online/offline counters) ----------
+const HOST_ONLINE_MS = Number(process.env.SYSLOG_HOST_ONLINE_MS || 60000); // seen within 60s = online
+const hosts = new Map(); // host -> { lastSeen }
+
+function noteHost(host, rinfo) {
+  const key = (host && host !== '-') ? host : ((rinfo && rinfo.address) || 'unknown');
+  hosts.set(key, { lastSeen: Date.now() });
+}
+
+function pruneHosts() {
+  const cutoff = Date.now() - 864e5; // forget hosts silent for 24h
+  for (const [k, rec] of hosts) if (rec.lastSeen < cutoff) hosts.delete(k);
+  while (hosts.size > 5000) { // hard cap, drop oldest
+    let oldest = null;
+    for (const [k, rec] of hosts) if (!oldest || rec.lastSeen < oldest.lastSeen) oldest = { k, lastSeen: rec.lastSeen };
+    if (!oldest) break;
+    hosts.delete(oldest.k);
+  }
+}
+
+function hostCounts() {
+  const now = Date.now();
+  const online = [], offline = [];
+  for (const [k, rec] of hosts) ((now - rec.lastSeen) < HOST_ONLINE_MS ? online : offline).push(k);
+  online.sort(); offline.sort();
+  return { online, offline, onlineCount: online.length, offlineCount: offline.length };
+}
+
+const store = (entry, rinfo) => {
+  noteHost(entry.host, rinfo);
+  return append(dateStr(new Date(entry.ts)), JSON.stringify(entry));
+};
 
 // ---------- receivers ----------
 const udp = dgram.createSocket('udp4');
-udp.on('message', (b, r) => store(parse(b, r)).catch(() => {}));
+udp.on('message', (b, r) => store(parse(b, r), r).catch(() => {}));
 udp.on('error', (e) => console.error('UDP error:', e));
 udp.bind(UDP_PORT, HOST);
 
@@ -111,7 +142,7 @@ net.createServer((sock) => {
     let i;
     while ((i = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, i); buf = buf.slice(i + 1);
-      if (line.trim()) store(parse(Buffer.from(line), { address: sock.remoteAddress })).catch(() => {});
+      if (line.trim()) store(parse(Buffer.from(line), { address: sock.remoteAddress }), { address: sock.remoteAddress }).catch(() => {});
     }
   });
 }).listen(TCP_PORT, HOST);
@@ -253,12 +284,16 @@ http.createServer(async (req, res) => {
       return sendJSON(res, ok ? 200 : 404, ok ? { ok: true } : { error: 'not found' });
     }
     if (p === '/api/health') return sendJSON(res, 200, { ok: true, uptime: process.uptime() });
+    if (p === '/api/hosts') {
+      pruneHosts();
+      return sendJSON(res, 200, { ...hostCounts() });
+    }
     return serveStatic(res, p);
   } catch (e) { console.error(e); sendJSON(res, 500, { error: e.message }); }
 }).listen(HTTP_PORT, HTTP_HOST, () => {
   console.log(`syslog up — UDP/TCP :${UDP_PORT}/${TCP_PORT}, GUI http://${HTTP_HOST}:${HTTP_PORT}, dir ${LOG_DIR}`);
   sweep();
-  setInterval(sweep, 3600e3).unref();
+  setInterval(() => { sweep(); pruneHosts(); }, 3600e3).unref();
 });
 
 scan().then(() => console.log('indexed existing days:', [...dayStats.keys()].join(', ') || '(none)'));
