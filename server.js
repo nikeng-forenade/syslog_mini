@@ -24,6 +24,8 @@ const readline  = require('readline');
 const crypto    = require('crypto');
 const { execFile } = require('child_process');
 
+const VERSION = '1.0.0'; // bump on every release; shown in the GUI header
+
 const HOST      = process.env.SYSLOG_HOST       || '0.0.0.0';
 const UDP_PORT  = Number(process.env.SYSLOG_UDP_PORT  || 514);
 const TCP_PORT  = Number(process.env.SYSLOG_TCP_PORT  || 514);
@@ -378,7 +380,7 @@ http.createServer(async (req, res) => {
       const ok = await deleteEntry(s.get('date'), s.get('id'));
       return sendJSON(res, ok ? 200 : 404, ok ? { ok: true } : { error: 'not found' });
     }
-    if (p === '/api/health') return sendJSON(res, 200, { ok: true, uptime: process.uptime() });
+    if (p === '/api/health') return sendJSON(res, 200, { ok: true, uptime: process.uptime(), version: VERSION });
     if (p === '/api/hosts') {
       pruneHosts();
       return sendJSON(res, 200, { ...hostCounts() });

@@ -56,6 +56,8 @@ systemctl restart syslog-server
 
 echo ""
 echo "=== Updated! ==="
+VERSION_STR=$(grep -oP "VERSION = '\K[^']+" "$APP_DIR/server.js" | head -1 || true)
+[ -n "$VERSION_STR" ] && echo "Version: v$VERSION_STR"
 echo "Backup: $BACKUP  (delete when happy: rm -rf $BACKUP)"
 echo "Check:  systemctl status syslog-server"
 echo "Logs:   journalctl -u syslog-server -f"
