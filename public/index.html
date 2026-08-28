@@ -49,6 +49,7 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
         <option>info</option><option>debug</option>
       </select>
       <input id="host" placeholder="host…">
+      <button id="export" title="Download filtered view as CSV">⬇ CSV</button>
       <span id="total" class="muted"></span>
     </div>
     <div class="table">
@@ -61,15 +62,21 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
 </div>
 <script>
 const $ = (s) => document.querySelector(s);
-let current = '', timer = null;
+let current = '', timer = null, daysData = [];
 const api = async (p, o) => { const r = await fetch(p, o); if (!r.ok) throw new Error(await r.text()); return r.json(); };
 const esc = (s) => s.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmtSize = (b) => b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB' : b >= 1e6 ? (b / 1e6).toFixed(2) + ' MB' : b >= 1e3 ? (b / 1e3).toFixed(1) + ' KB' : b + ' B';
 
 function loadDays() {
   api('/api/days').then(({ days }) => {
-    $('#days').innerHTML = days.map((d) => `
+    daysData = days;
+    const totalCount = days.reduce((s, d) => s + d.count, 0);
+    const totalSize = days.reduce((s, d) => s + d.size, 0);
+    $('#days').innerHTML =
+      (days.length ? `<div class="day" style="cursor:default;font-weight:600"><span>Total</span><span class="count">${totalCount} · ${fmtSize(totalSize)}</span></div><div style="height:1px;background:var(--line);margin:6px 0"></div>` : '') +
+      days.map((d) => `
       <div class="day ${d.date === current ? 'active' : ''}" data-date="${d.date}">
-        <span>${d.date} <span class="count">(${d.count})</span></span>
+        <span>${d.date} <span class="count">(${d.count} · ${fmtSize(d.size)})</span></span>
         <button class="del danger" title="delete this day"
           onclick="event.stopPropagation();delDay('${d.date}')">🗑</button>
       </div>`).join('') || '<div class="muted">no logs yet</div>';
@@ -98,7 +105,8 @@ function refresh() {
   if ($('#sev').value) qs.set('severity', $('#sev').value);
   if ($('#host').value) qs.set('host', $('#host').value);
   api('/api/logs?' + qs).then(({ logs, total }) => {
-    $('#total').textContent = `${total} entries`;
+    const day = daysData.find((d) => d.date === current);
+    $('#total').textContent = day ? `${total} entries · ${fmtSize(day.size)}` : `${total} entries`;
     $('#rows').innerHTML = logs.map((e) => `
       <tr>
         <td class="muted">${new Date(e.ts).toLocaleString()}</td>
@@ -112,6 +120,14 @@ function refresh() {
 }
 
 $('#refresh').onclick = () => { refresh(); loadDays(); };
+$('#export').onclick = () => {
+  if (!current) return;
+  const qs = new URLSearchParams({ date: current });
+  if ($('#q').value) qs.set('q', $('#q').value);
+  if ($('#sev').value) qs.set('severity', $('#sev').value);
+  if ($('#host').value) qs.set('host', $('#host').value);
+  window.location = '/api/export?' + qs;
+};
 $('#autorefresh').onchange = () => {
   clearInterval(timer);
   if ($('#autorefresh').checked) timer = setInterval(() => { loadDays(); refresh(); }, 5000);

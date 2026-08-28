@@ -139,6 +139,34 @@ async function readLogs(date, { q, host, severity, limit, offset }) {
   return { total, logs: out };
 }
 
+// ── CSV export ─────────────────────────────────────────────
+const csvField = (v) => {
+  const s = String(v ?? '');
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+};
+
+async function exportLogsCsv(res, date, { q, host, severity }) {
+  res.on('error', () => {}); // client disconnected mid-stream
+  const filename = `syslog-${date}.csv`;
+  res.writeHead(200, {
+    'Content-Type': 'text/csv; charset=utf-8',
+    'Content-Disposition': `attachment; filename="${filename}"`,
+  });
+  res.write('\uFEFF'); // UTF-8 BOM so Excel opens it correctly
+  res.write('timestamp,host,facility,severity,tag,message\n');
+  if (!fs.existsSync(fileOf(date))) return res.end();
+  const rl = readline.createInterface({ input: fs.createReadStream(fileOf(date)), crlfDelay: Infinity });
+  for await (const line of rl) {
+    if (!line.trim()) continue;
+    let e; try { e = JSON.parse(line); } catch { continue; }
+    if (q && !(e.msg + ' ' + e.tag).toLowerCase().includes(q.toLowerCase())) continue;
+    if (host && e.host !== host) continue;
+    if (severity && e.severity !== severity) continue;
+    res.write([e.ts, e.host, e.facility, e.severity, e.tag, e.msg].map(csvField).join(',') + '\n');
+  }
+  return res.end();
+}
+
 async function deleteEntry(date, id) {
   const file = fileOf(date);
   if (!fs.existsSync(file)) return false;
@@ -203,6 +231,11 @@ http.createServer(async (req, res) => {
         q: s.get('q') || '', host: s.get('host') || '', severity: s.get('severity') || '',
         limit: Math.min(Number(s.get('limit') || 500), 5000), offset: Number(s.get('offset') || 0) });
       return sendJSON(res, 200, { date, ...r });
+    }
+    if (p === '/api/export') {
+      const date = s.get('date') || dateStr();
+      return exportLogsCsv(res, date, {
+        q: s.get('q') || '', host: s.get('host') || '', severity: s.get('severity') || '' });
     }
     if (p === '/api/logs' && req.method === 'DELETE') {
       const date = s.get('date');

@@ -43,6 +43,7 @@ logger -n 127.0.0.1 -T -P 514 -p user.warning "tcp test"
 |--------|-------------------------------|--------------------------------------|
 | GET    | `/api/days`                   | List days with entry counts          |
 | GET    | `/api/logs?date=YYYY-MM-DD&q=…&host=…&severity=…&limit=500&offset=0` | Query a day |
+| GET    | `/api/export?date=YYYY-MM-DD&q=…&host=…&severity=…` | Download a day as CSV (Excel-ready) |
 | DELETE | `/api/logs?date=YYYY-MM-DD`   | Delete a whole day's file            |
 | DELETE | `/api/entry?date=YYYY-MM-DD&id=…` | Delete one entry                 |
 | GET    | `/api/health`                 | Liveness check                       |
