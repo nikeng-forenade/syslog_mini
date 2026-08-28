@@ -259,10 +259,17 @@ function loadHosts() {
       $('#hosts').innerHTML =
         `<span class="online-dot">●</span> ${onlineCount}&nbsp; ` +
         `<span class="offline-dot">●</span> ${offlineCount}`;
-      $('#hostList').innerHTML = [...online, ...offline]
-        .map((h) => `<option value="${esc(h.host)}"></option>`).join('');
     })
     .catch(() => { $('#hosts').textContent = '—'; });
+}
+function loadHostFilter() {
+  fetch('/api/hosts/all', { cache: 'no-store' })
+    .then((r) => r.ok ? r.json() : Promise.reject())
+    .then(({ hosts }) => {
+      $('#hostList').innerHTML = (hosts || [])
+        .map((h) => `<option value="${esc(h)}"></option>`).join('');
+    })
+    .catch(() => {});
 }
 function fmtAgo(ms) {
   if (ms < 60000) return Math.round(ms / 1000) + 's ago';
@@ -374,9 +381,11 @@ $('#backupsList').addEventListener('click', (e) => {
 
 checkHealth();
 loadHosts();
+loadHostFilter();
 loadDisk();
 loadDays();
 timer = setInterval(() => { loadDays(); refresh(); checkHealth(); loadHosts(); loadDisk(); }, 5000);
+setInterval(() => { loadHostFilter(); }, 30000);
 </script>
 </body>
 </html>

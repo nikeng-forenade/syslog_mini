@@ -25,7 +25,7 @@ const readline  = require('readline');
 const crypto    = require('crypto');
 const { execFile, exec } = require('child_process');
 
-const VERSION = '1.2.0'; // bump on every release; shown in the GUI header
+const VERSION = '1.3.0'; // bump on every release; shown in the GUI header
 
 const HOST      = process.env.SYSLOG_HOST       || '0.0.0.0';
 const UDP_PORT  = Number(process.env.SYSLOG_UDP_PORT  || 514);
@@ -240,6 +240,24 @@ function hostCounts() {
   online.sort((a, b) => a.host.localeCompare(b.host));
   offline.sort((a, b) => a.host.localeCompare(b.host));
   return { online, offline, onlineCount: online.length, offlineCount: offline.length };
+}
+
+async function hostsInLogs() {
+  const set = new Set();
+  for (const k of hosts.keys()) if (k && k !== '-' && k !== 'unknown') set.add(k);
+  let files = [];
+  try { files = fs.readdirSync(LOG_DIR).filter((f) => f.endsWith('.jsonl')); } catch {}
+  for (const f of files) {
+    try {
+      const rl = readline.createInterface({ input: fs.createReadStream(path.join(LOG_DIR, f)), crlfDelay: Infinity });
+      for await (const line of rl) {
+        if (!line.trim()) continue;
+        let e; try { e = JSON.parse(line); } catch { continue; }
+        if (e && e.host && e.host !== '-' && e.host !== 'unknown') set.add(e.host);
+      }
+    } catch {}
+  }
+  return [...set].sort((a, b) => a.localeCompare(b));
 }
 
 const store = (entry, rinfo) => {
@@ -468,6 +486,9 @@ http.createServer(async (req, res) => {
     if (p === '/api/hosts') {
       pruneHosts();
       return sendJSON(res, 200, { ...hostCounts() });
+    }
+    if (p === '/api/hosts/all') {
+      return sendJSON(res, 200, { hosts: await hostsInLogs() });
     }
     if (p === '/api/hosts/config' && req.method === 'PUT') {
       const body = await readBody(req);
