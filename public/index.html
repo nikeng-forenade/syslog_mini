@@ -70,7 +70,8 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
   <main>
     <div class="filters">
       <input id="q" placeholder="search…">
-      <input id="host" placeholder="host…">
+      <input id="host" placeholder="host…" list="hostList">
+      <datalist id="hostList"></datalist>
       <select id="order" title="Sort order">
         <option value="desc">Newest first</option>
         <option value="asc">Oldest first</option>
@@ -241,10 +242,12 @@ function checkHealth() {
 function loadHosts() {
   fetch('/api/hosts', { cache: 'no-store' })
     .then((r) => r.ok ? r.json() : Promise.reject())
-    .then(({ onlineCount, offlineCount }) => {
+    .then(({ online, offline, onlineCount, offlineCount }) => {
       $('#hosts').innerHTML =
         `<span class="online-dot">●</span> ${onlineCount}&nbsp; ` +
         `<span class="offline-dot">●</span> ${offlineCount}`;
+      $('#hostList').innerHTML = [...online, ...offline]
+        .map((h) => `<option value="${esc(h.host)}"></option>`).join('');
     })
     .catch(() => { $('#hosts').textContent = '—'; });
 }
