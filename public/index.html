@@ -55,6 +55,47 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
 .backup-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #1b202a;flex-wrap:wrap}
 .backup-row .hint{color:var(--muted);font-size:11px}
 .muted{color:var(--muted)}
+
+/* ---------- tablet / narrow screens ---------- */
+@media (max-width:860px){
+  .wrap{grid-template-columns:1fr;height:auto}
+  aside{border-right:0;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;padding:8px 10px;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  aside>div.muted{flex-shrink:0;font-size:12px}
+  #days{display:flex;align-items:center;gap:6px;white-space:nowrap}
+  #days .day{font-size:12px;padding:5px 8px}
+  #days .day .count{display:none}
+  #days .day .del{padding:1px 5px}
+  #days>div[style*="height:1px"]{width:1px;height:14px;margin:0 2px;flex-shrink:0}
+  .table{overflow:visible;flex:none}
+}
+/* ---------- phones ---------- */
+@media (max-width:640px){
+  header{flex-wrap:wrap;gap:8px;padding:8px 10px}
+  header h1{font-size:14px}
+  #ver,#disk{display:none}
+  header>div[style*="flex:1"]{display:none}
+  header button{padding:4px 8px;font-size:12px}
+  .filters{gap:6px;padding:8px 10px}
+  .filters input[type=text],.filters #q,.filters #host{flex:1 1 130px;min-width:0}
+  #total{width:100%;font-size:11px}
+  .chips{padding:6px 10px;position:sticky;top:0;background:var(--bg);z-index:5}
+  /* log rows become stacked cards */
+  table,thead,tbody,tr,td{display:block}
+  thead{display:none}
+  tr{padding:8px 10px;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline;border-bottom:1px solid #1b202a}
+  tr:hover td{background:transparent}
+  td{border:0;padding:2px 0}
+  td:nth-child(4){display:none}
+  td:nth-child(1){order:1;width:100%;font-size:11px}
+  td:nth-child(5){order:2;width:100%;margin:2px 0 4px}
+  td:nth-child(2){order:3;font-size:12px}
+  td:nth-child(3){order:4}
+  td:nth-child(6){order:5;margin-left:auto}
+  .modal-header{flex-wrap:wrap;font-size:13px;padding:10px 12px}
+  .host-controls{gap:10px}
+  .host-field input[type=number]{width:80px}
+  .modal-body,.modal-footer{padding-left:12px;padding-right:12px}
+}
 </style>
 </head>
 <body>
