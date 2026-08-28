@@ -82,6 +82,7 @@ systemctl enable --now syslog-server
 | `IP/CIDR` | `dhcp` | Static IP with CIDR, or `dhcp` |
 | `GATEWAY` | *(none)* | Gateway IP (only used with static IP) |
 | `--port`, `--udp-port`, `--tcp-port`, `--log-dir`, `--retention`, `--keep-rsyslog` | *(defaults above)* | Forwarded to `install.sh` |
+| `--disk GB` | `4` | Root disk size in GB |
 
 ## Updating the syslog app
 

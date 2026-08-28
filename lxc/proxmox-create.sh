@@ -46,6 +46,7 @@ STORAGE="local-lvm"
 BRIDGE="vmbr0"
 IP="dhcp"
 GATEWAY=""
+DISK_SIZE="4"
 INSTALL_OPTS=""
 MODE="default"
 
@@ -63,6 +64,9 @@ show_help() {
   echo "  --log-dir DIR         Log storage dir (default: /var/log/syslog-server)"
   echo "  --retention DAYS      Auto-delete days older than N (default: 30, 0=keep all)"
   echo "  --keep-rsyslog        Keep local rsyslog inside the container"
+  echo ""
+  echo "Container options:"
+  echo "  --disk GB             Root disk size in GB (default: 4)"
   echo "  --help                Show this help"
   exit 0
 }
@@ -74,6 +78,8 @@ while [[ $# -gt 0 ]]; do
     --help) show_help ;;
     --port|--udp-port|--tcp-port|--log-dir|--retention)
       INSTALL_OPTS="$INSTALL_OPTS $1 $2"; shift 2 ;;
+    --disk)
+      DISK_SIZE="$2"; shift 2 ;;
     --keep-rsyslog)
       INSTALL_OPTS="$INSTALL_OPTS $1"; shift ;;
     --*) echo "Unknown option: $1"; exit 1 ;;
@@ -110,6 +116,7 @@ if [[ ${#POS_ARGS[@]} -eq 0 ]] && [[ -z "$INSTALL_OPTS" ]]; then
     fi
     read -r -p "  GUI port [8080]: " input; INSTALL_OPTS="--port ${input:-8080}"
     read -r -p "  Retention days [30] (0=keep all): " input; INSTALL_OPTS="$INSTALL_OPTS --retention ${input:-30}"
+    read -r -p "  Disk size GB [4]: " input; DISK_SIZE="${input:-4}"
   fi
 fi
 
@@ -118,6 +125,7 @@ echo ""
 echo "=== Syslog Server LXC Setup ==="
 echo "CT ID:    $CT_ID"
 echo "Storage:  $STORAGE"
+echo "Disk:     ${DISK_SIZE} GB"
 echo "Bridge:   $BRIDGE"
 echo "IP:       $IP"
 [[ -n "$GATEWAY" ]] && echo "Gateway:  $GATEWAY"
@@ -177,6 +185,7 @@ STORAGE=$(sanitize "$STORAGE")
 BRIDGE=$(sanitize "$BRIDGE")
 IP=$(sanitize "$IP")
 GATEWAY=$(sanitize "$GATEWAY")
+DISK_SIZE=$(sanitize "$DISK_SIZE")
 TEMPLATE_STORAGE=$(sanitize "$TEMPLATE_STORAGE")
 
 # Auto-append /24 if bare IP entered (Proxmox requires CIDR)
@@ -196,7 +205,7 @@ echo "Creating container with: net0=$NET0"
 pct create "$CT_ID" \
   "${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE}" \
   --hostname "syslog" \
-  --rootfs "${STORAGE}:4" \
+  --rootfs "${STORAGE}:${DISK_SIZE}" \
   --memory "512" \
   --cores "1" \
   --net0 "$NET0" \

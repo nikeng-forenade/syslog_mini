@@ -61,7 +61,7 @@ bash -c "$(wget -qLO - https://raw.githubusercontent.com/nikeng-forenade/syslog_
 ```
 
 It prompts for **Default** (DHCP, GUI 8080, UDP/TCP 514) or **Advanced** (custom
-IP, ports, retention). Non-interactive:
+IP, ports, retention, disk size). Non-interactive:
 
 ```bash
 bash -c "$(wget -qLO - https://raw.githubusercontent.com/nikeng-forenade/syslog_mini/main/lxc/proxmox-create.sh)" -- \
