@@ -10,6 +10,7 @@ set -e
 
 # ── Config ─────────────────────────────────────────────────
 APP_DIR="/opt/syslog-server"
+BACKUP_KEEP="${BACKUP_KEEP:-3}"   # keep newest N backups, prune older ones
 GITHUB_OWNER="${GITHUB_OWNER:-nikeng-forenade}"
 GITHUB_REPO="${GITHUB_REPO:-syslog_mini}"
 GITHUB_BRANCH="${GITHUB_BRANCH:-main}"
@@ -46,6 +47,16 @@ cp "$APP_DIR/server.js" "$BACKUP/server.js"
 cp "$APP_DIR/public/index.html" "$BACKUP/index.html"
 echo "Backed up current version to $BACKUP"
 
+# ── Prune old backups (keep newest $BACKUP_KEEP) ───────────
+PRUNED=0
+if [ -d "$APP_DIR/backups" ] && [ "$BACKUP_KEEP" -gt 0 ] 2>/dev/null; then
+  while [ "$(ls -1 "$APP_DIR/backups" | wc -l)" -gt "$BACKUP_KEEP" ]; do
+    OLDEST=$(ls -1 "$APP_DIR/backups" | sort | head -n1)
+    [ -n "$OLDEST" ] && rm -rf "$APP_DIR/backups/$OLDEST" && PRUNED=$((PRUNED + 1))
+  done
+fi
+[ "$PRUNED" -gt 0 ] && echo "Pruned $PRUNED old backup(s) — keeping the newest $BACKUP_KEEP."
+
 # ── Install new ────────────────────────────────────────────
 chmod +x "$TMP/server.js"
 cp "$TMP/server.js" "$APP_DIR/server.js"
@@ -58,6 +69,7 @@ echo ""
 echo "=== Updated! ==="
 VERSION_STR=$(grep -oP "VERSION = '\K[^']+" "$APP_DIR/server.js" | head -1 || true)
 [ -n "$VERSION_STR" ] && echo "Version: v$VERSION_STR"
-echo "Backup: $BACKUP  (delete when happy: rm -rf $BACKUP)"
+echo "Backup: $BACKUP"
+echo "Backups kept: $BACKUP_KEEP (oldest pruned automatically)"
 echo "Check:  systemctl status syslog-server"
 echo "Logs:   journalctl -u syslog-server -f"

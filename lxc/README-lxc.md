@@ -104,6 +104,9 @@ files, and restarts the service. It also self-heals DNS if resolution fails
 (injects `1.1.1.1`/`8.8.8.8`). Set `GITHUB_OWNER`/`GITHUB_REPO`/`GITHUB_BRANCH`
 if you host it elsewhere.
 
+Old backups are **pruned automatically** — only the newest `BACKUP_KEEP` are kept
+(default 3, e.g. `BACKUP_KEEP=5 pct exec <CTID> -- bash /root/update.sh`).
+
 ## Defaults
 
 | Setting | Value |
