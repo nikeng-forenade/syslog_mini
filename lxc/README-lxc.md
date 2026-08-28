@@ -83,6 +83,27 @@ systemctl enable --now syslog-server
 | `GATEWAY` | *(none)* | Gateway IP (only used with static IP) |
 | `--port`, `--udp-port`, `--tcp-port`, `--log-dir`, `--retention`, `--keep-rsyslog` | *(defaults above)* | Forwarded to `install.sh` |
 
+## Updating the syslog app
+
+`proxmox-create.sh` also pushes `lxc/update.sh` into the container (at
+`/root/update.sh`). To update to the latest code, from the **Proxmox host**:
+
+```bash
+pct exec <CTID> -- bash /root/update.sh
+```
+
+Or run it directly from GitHub without a local copy:
+
+```bash
+pct exec <CTID> -- bash -c "$(curl -fsSL https://raw.githubusercontent.com/nikeng-forenade/syslog_mini/main/lxc/update.sh)"
+```
+
+What it does: re-downloads `server.js` + `public/index.html`, backs up the
+current version to `/opt/syslog-server/backups/<timestamp>/`, installs the new
+files, and restarts the service. It also self-heals DNS if resolution fails
+(injects `1.1.1.1`/`8.8.8.8`). Set `GITHUB_OWNER`/`GITHUB_REPO`/`GITHUB_BRANCH`
+if you host it elsewhere.
+
 ## Defaults
 
 | Setting | Value |

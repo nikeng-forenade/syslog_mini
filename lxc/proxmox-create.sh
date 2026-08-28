@@ -15,6 +15,7 @@ GITHUB_REPO="${GITHUB_REPO:-syslog_mini}"
 GITHUB_BRANCH="${GITHUB_BRANCH:-main}"
 GITHUB_RAW="https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/${GITHUB_BRANCH}"
 INSTALL_SCRIPT_URL="${GITHUB_RAW}/lxc/install.sh"
+UPDATE_SCRIPT_URL="${GITHUB_RAW}/lxc/update.sh"
 SERVER_JS_URL="${GITHUB_RAW}/server.js"
 INDEX_HTML_URL="${GITHUB_RAW}/public/index.html"
 
@@ -23,15 +24,18 @@ LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [[ -f "$LOCAL_DIR/install.sh" && -f "$LOCAL_DIR/../server.js" ]]; then
   echo "Running from local clone: $LOCAL_DIR"
   INSTALL_SCRIPT="$LOCAL_DIR/install.sh"
+  UPDATE_SCRIPT="$LOCAL_DIR/update.sh"
   SERVER_JS="$LOCAL_DIR/../server.js"
   INDEX_HTML="$LOCAL_DIR/../public/index.html"
 else
   mkdir -p /tmp/syslog-lxc
   INSTALL_SCRIPT="/tmp/syslog-lxc/install.sh"
+  UPDATE_SCRIPT="/tmp/syslog-lxc/update.sh"
   SERVER_JS="/tmp/syslog-lxc/server.js"
   INDEX_HTML="/tmp/syslog-lxc/index.html"
   echo "Downloading scripts from $GITHUB_RAW ..."
   wget -qO "$INSTALL_SCRIPT" "$INSTALL_SCRIPT_URL" || { echo "ERROR: Could not download install.sh from $INSTALL_SCRIPT_URL"; exit 1; }
+  wget -qO "$UPDATE_SCRIPT" "$UPDATE_SCRIPT_URL" || { echo "ERROR: Could not download update.sh from $UPDATE_SCRIPT_URL"; exit 1; }
   wget -qO "$SERVER_JS" "$SERVER_JS_URL" || { echo "ERROR: Could not download server.js from $SERVER_JS_URL"; exit 1; }
   wget -qO "$INDEX_HTML" "$INDEX_HTML_URL" || { echo "ERROR: Could not download public/index.html from $INDEX_HTML_URL"; exit 1; }
 fi
@@ -209,10 +213,11 @@ sleep 10
 echo "Installing prerequisites..."
 pct exec "$CT_ID" -- bash -c "apt-get update && apt-get install -y curl ca-certificates"
 
-# ── Push app files and install script ──────────────────────
+# ── Push app files and install/update scripts ─────────────
 echo "Pushing app files..."
 pct exec "$CT_ID" -- mkdir -p /root/syslog/public
 pct push "$CT_ID" "$INSTALL_SCRIPT" /root/install.sh
+pct push "$CT_ID" "$UPDATE_SCRIPT" /root/update.sh
 pct push "$CT_ID" "$SERVER_JS" /root/syslog/server.js
 pct push "$CT_ID" "$INDEX_HTML" /root/syslog/public/index.html
 
