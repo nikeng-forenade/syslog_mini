@@ -25,6 +25,9 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
 .notice{background:#2563eb}.info{background:#4b5563}.debug{background:#374151}
 .msg{white-space:pre-wrap;word-break:break-word}.del{opacity:.4}tr:hover .del{opacity:1}
 .day .del{opacity:.9;padding:2px 6px;font-size:12px}.day:hover .del{opacity:1}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.25}}
+#status.online{color:#22c55e;animation:blink 1.2s ease-in-out infinite;font-weight:600}
+#status.offline{color:#ef4444;animation:blink .8s ease-in-out infinite;font-weight:600}
 .muted{color:var(--muted)}
 </style>
 </head>
@@ -85,7 +88,7 @@ function loadDays() {
       </div>`).join('') || '<div class="muted">no logs yet</div>';
     document.querySelectorAll('.day').forEach((el) =>
       el.addEventListener('click', () => { current = el.dataset.date; refresh(); loadDays(); }));
-  }).catch(() => { $('#status').textContent = 'server unreachable'; });
+  }).catch(() => setStatus(false));
 }
 
 function delDay(date) {
@@ -144,9 +147,19 @@ $('#autorefresh').onchange = () => {
   if ($('#autorefresh').checked) timer = setInterval(() => { loadDays(); refresh(); }, 5000);
 };
 ['#q', '#sev', '#host'].forEach((s) => $(s).addEventListener('input', refresh));
-fetch('/api/health').then(() => { $('#status').textContent = '● online'; }).catch(() => {});
+function setStatus(ok) {
+  const el = $('#status');
+  el.textContent = ok ? '● online' : '● offline';
+  el.className = ok ? 'online' : 'offline';
+}
+function checkHealth() {
+  fetch('/api/health', { cache: 'no-store' })
+    .then((r) => setStatus(r.ok))
+    .catch(() => setStatus(false));
+}
+checkHealth();
 loadDays();
-timer = setInterval(() => { loadDays(); refresh(); }, 5000);
+timer = setInterval(() => { loadDays(); refresh(); checkHealth(); }, 5000);
 </script>
 </body>
 </html>
