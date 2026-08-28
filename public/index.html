@@ -58,6 +58,7 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
   <div style="flex:1"></div>
   <label class="muted"><input type="checkbox" id="autorefresh" checked> auto</label>
   <button id="backupsBtn" title="Manage backups">🗄</button>
+  <button id="updateBtn" title="Update from GitHub (backs up, downloads latest, restarts)">⬆ Update</button>
   <button id="refresh">Refresh</button>
 </header>
 <div class="wrap">
@@ -70,9 +71,9 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
   <main>
     <div class="filters">
       <input id="q" placeholder="search…">
+      <button id="clearFilters" title="Clear search, host and severity filters">✕ Clear</button>
       <input id="host" placeholder="host…" list="hostList">
       <datalist id="hostList"></datalist>
-      <button id="clearFilters" title="Clear search, host and severity filters">✕ Clear</button>
       <select id="order" title="Sort order">
         <option value="desc">Newest first</option>
         <option value="asc">Oldest first</option>
@@ -320,6 +321,13 @@ function openBackupsModal() {
 }
 
 $('#backupsBtn').onclick = openBackupsModal;
+$('#updateBtn').onclick = () => {
+  if (!confirm('Update the syslog server from GitHub?\nIt will back up the current version, download the latest code, and restart the service.')) return;
+  fetch('/api/update', { method: 'POST' })
+    .then((r) => r.ok ? r.json() : Promise.reject())
+    .then((d) => alert('Update complete!\nBacked up to ' + (d.backup || '?') + '.\nThe service is restarting — refresh in a few seconds.'))
+    .catch(() => alert('Update failed — is the server online?'));
+};
 $('#closeBackups').onclick = () => { $('#backupsModal').style.display = 'none'; };
 $('#backupsModal').addEventListener('click', (e) => {
   if (e.target === $('#backupsModal')) $('#backupsModal').style.display = 'none';

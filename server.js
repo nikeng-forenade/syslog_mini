@@ -248,6 +248,7 @@ function readBody(req) {
 const APP_DIR = process.env.SYSLOG_APP_DIR || __dirname;
 const BACKUP_DIR = path.join(APP_DIR, 'backups');
 const SETTINGS_FILE = path.join(APP_DIR, 'settings.json');
+const UPDATE_BASE = process.env.SYSLOG_UPDATE_BASE || 'https://raw.githubusercontent.com/nikeng-forenade/syslog_mini/main';
 let backupKeep = Number(process.env.SYSLOG_BACKUP_KEEP || 3);
 
 function loadSettings() {
@@ -469,6 +470,29 @@ http.createServer(async (req, res) => {
       if (fs.existsSync(path.join(src, 'index.html'))) { await fsp.copyFile(path.join(src, 'index.html'), path.join(APP_DIR, 'public', 'index.html')); restored.push('index.html'); }
       setTimeout(() => { try { exec('systemctl restart syslog-server', () => {}); } catch {} }, 400);
       return sendJSON(res, 200, { ok: true, restored, restarting: true });
+    }
+    if (p === '/api/update' && req.method === 'POST') {
+      const [srvRes, htmlRes] = await Promise.all([
+        fetch(UPDATE_BASE + '/server.js', { signal: AbortSignal.timeout(15000) }),
+        fetch(UPDATE_BASE + '/public/index.html', { signal: AbortSignal.timeout(15000) }),
+      ]);
+      if (!srvRes.ok) return sendJSON(res, 502, { error: 'failed to download server.js' });
+      if (!htmlRes.ok) return sendJSON(res, 502, { error: 'failed to download index.html' });
+      const serverJs = await srvRes.text();
+      const indexHtml = await htmlRes.text();
+      if (!serverJs.includes('VERSION')) return sendJSON(res, 502, { error: 'downloaded server.js looks invalid' });
+      const p2 = (n) => String(n).padStart(2, '0');
+      const nw = new Date();
+      const TS = `${nw.getFullYear()}${p2(nw.getMonth() + 1)}${p2(nw.getDate())}-${p2(nw.getHours())}${p2(nw.getMinutes())}${p2(nw.getSeconds())}`;
+      const BACKUP = path.join(BACKUP_DIR, TS);
+      await fsp.mkdir(BACKUP, { recursive: true });
+      await fsp.copyFile(path.join(APP_DIR, 'server.js'), path.join(BACKUP, 'server.js'));
+      await fsp.copyFile(path.join(APP_DIR, 'public', 'index.html'), path.join(BACKUP, 'index.html'));
+      await fsp.writeFile(path.join(APP_DIR, 'server.js'), serverJs);
+      await fsp.writeFile(path.join(APP_DIR, 'public', 'index.html'), indexHtml);
+      pruneBackups();
+      setTimeout(() => { try { exec('systemctl restart syslog-server', () => {}); } catch {} }, 500);
+      return sendJSON(res, 200, { ok: true, backup: TS, restarting: true });
     }
     return serveStatic(res, p);
   } catch (e) { console.error(e); sendJSON(res, 500, { error: e.message }); }
