@@ -240,7 +240,8 @@ function openHostsModal() {
         <div class="host-row" data-host="${esc(h.host)}">
           <span class="${h.online ? 'online-dot' : 'offline-dot'}">●</span>
           <span class="host-name" title="${esc(h.host)}">${esc(h.host)}</span>
-          <span class="hint">${fmtAgo(h.lastSeenAgoMs)}</span>
+          <span class="hint">${fmtAgo(h.lastSeenAgoMs)}${h.pingOk ? ' · 📶' : ''}${h.via && h.via !== 'none' ? ' · ' + h.via : ''}</span>
+          <label class="hint"><input type="checkbox" data-ping ${h.ping ? 'checked' : ''}> ping</label>
           <label class="hint">online after</label>
           <input type="number" min="0" max="86400" step="1" value="${Math.round((h.configuredMs || h.onlineMs) / 1000)}">
           <button data-action="save">Save</button>
@@ -261,11 +262,12 @@ $('#hostsList').addEventListener('click', (e) => {
   if (!btn) return;
   const row = btn.closest('.host-row');
   const host = row.dataset.host;
+  const pingEl = row.querySelector('[data-ping]');
   const onlineMs = btn.dataset.action === 'reset' ? 0 : Number(row.querySelector('input').value) * 1000;
   fetch('/api/hosts/config', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ host, onlineMs }),
+    body: JSON.stringify({ host, onlineMs, ping: pingEl ? pingEl.checked : undefined }),
   }).then((r) => r.ok ? openHostsModal() : alert('Save failed'));
 });
 

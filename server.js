@@ -22,6 +22,7 @@ const fsp       = fs.promises;
 const path      = require('path');
 const readline  = require('readline');
 const crypto    = require('crypto');
+const { execFile } = require('child_process');
 
 const HOST      = process.env.SYSLOG_HOST       || '0.0.0.0';
 const UDP_PORT  = Number(process.env.SYSLOG_UDP_PORT  || 514);
@@ -98,23 +99,52 @@ function parse(buf, rinfo) {
 // ---------- host tracking (online/offline counters) ----------
 const HOST_ONLINE_MS = Number(process.env.SYSLOG_HOST_ONLINE_MS || 60000); // default: seen within 60s = online
 const HOST_CONFIG_FILE = path.join(LOG_DIR, 'hosts.json'); // per-host overrides, persisted
-const hosts = new Map();        // host -> { lastSeen }
+const hosts = new Map();        // host -> { lastSeen, sourceIp, pingOk, pingAt }
 const hostConfigs = new Map();  // host -> { onlineMs } (0/absent = use default)
+
+// Ping liveness: a host is online if it answers ping OR sent logs recently.
+const PING_ENABLED = process.env.SYSLOG_PING !== '0';
+const PING_INTERVAL_MS = Number(process.env.SYSLOG_PING_INTERVAL || 15000);
+const PING_TIMEOUT_S = Number(process.env.SYSLOG_PING_TIMEOUT || 2);
+const PING_WINDOW_MS = Math.max(Number(process.env.SYSLOG_PING_WINDOW || 60000), PING_INTERVAL_MS * 2);
+
+function pingTarget(target) {
+  return new Promise((resolve) => {
+    execFile('ping', ['-c', '1', '-W', String(PING_TIMEOUT_S), target], { timeout: (PING_TIMEOUT_S + 1) * 1000 }, (err) => resolve(!err));
+  });
+}
+
+async function pingLoop() {
+  const now = Date.now();
+  await Promise.all([...hosts.entries()].map(async ([key, rec]) => {
+    if (!hostPingEnabled(key)) { rec.pingOk = false; rec.pingAt = now; return; }
+    const target = rec.sourceIp || (/^\d+\.\d+\.\d+\.\d+$/.test(key) ? key : null);
+    if (!target) { rec.pingOk = false; rec.pingAt = now; return; }
+    rec.pingOk = await pingTarget(target);
+    rec.pingAt = now;
+  }));
+}
 
 function loadHostConfigs() {
   try {
     const data = JSON.parse(fs.readFileSync(HOST_CONFIG_FILE, 'utf8'));
     for (const [k, v] of Object.entries(data)) {
       const ms = Number(v && v.onlineMs);
-      if (Number.isFinite(ms) && ms > 0) hostConfigs.set(k, { onlineMs: ms });
+      const ping = v && v.ping !== undefined ? !!v.ping : true;
+      if (Number.isFinite(ms) && ms > 0) hostConfigs.set(k, { onlineMs: ms, ping });
     }
   } catch {}
 }
 
 function saveHostConfigs() {
   const obj = {};
-  for (const [k, v] of hostConfigs) obj[k] = { onlineMs: v.onlineMs };
+  for (const [k, v] of hostConfigs) obj[k] = { onlineMs: v.onlineMs, ping: v.ping === false ? false : true };
   try { fs.writeFileSync(HOST_CONFIG_FILE, JSON.stringify(obj, null, 2)); } catch {}
+}
+
+function hostPingEnabled(host) {
+  const c = hostConfigs.get(host);
+  return c ? c.ping !== false : PING_ENABLED;
 }
 
 function effectiveOnlineMs(host) {
@@ -124,7 +154,10 @@ function effectiveOnlineMs(host) {
 
 function noteHost(host, rinfo) {
   const key = (host && host !== '-') ? host : ((rinfo && rinfo.address) || 'unknown');
-  hosts.set(key, { lastSeen: Date.now() });
+  const rec = hosts.get(key) || { lastSeen: 0, sourceIp: null, pingOk: false, pingAt: 0 };
+  rec.lastSeen = Date.now();
+  if (rinfo && rinfo.address) rec.sourceIp = rinfo.address;
+  hosts.set(key, rec);
 }
 
 function pruneHosts() {
@@ -143,8 +176,16 @@ function hostCounts() {
   const online = [], offline = [];
   for (const [k, rec] of hosts) {
     const onlineMs = effectiveOnlineMs(k);
-    const isOnline = (now - rec.lastSeen) < onlineMs;
-    const item = { host: k, online: isOnline, onlineMs, configuredMs: (hostConfigs.get(k) || {}).onlineMs || null, lastSeen: rec.lastSeen, lastSeenAgoMs: now - rec.lastSeen };
+    const pingOn = hostPingEnabled(k);
+    const logActive = (now - rec.lastSeen) < onlineMs;
+    const pingActive = pingOn && rec.pingOk && (now - rec.pingAt) < PING_WINDOW_MS;
+    const isOnline = logActive || pingActive;
+    const item = {
+      host: k, online: isOnline, onlineMs, configuredMs: (hostConfigs.get(k) || {}).onlineMs || null,
+      lastSeen: rec.lastSeen, lastSeenAgoMs: now - rec.lastSeen,
+      ping: pingOn, pingOk: !!rec.pingOk, pingAt: rec.pingAt, pingAgoMs: rec.pingAt ? now - rec.pingAt : null,
+      via: isOnline ? (pingActive ? 'ping' : 'logs') : 'none',
+    };
     (isOnline ? online : offline).push(item);
   }
   online.sort((a, b) => a.host.localeCompare(b.host));
@@ -338,10 +379,12 @@ http.createServer(async (req, res) => {
       const ms = Number(body.onlineMs);
       if (!body.host || !Number.isFinite(ms) || ms < 0) return sendJSON(res, 400, { error: 'host and onlineMs (seconds>=0) required' });
       const onlineMs = Math.min(ms, 86400000);
-      if (onlineMs === 0) hostConfigs.delete(body.host);
-      else hostConfigs.set(body.host, { onlineMs });
+      const cur = hostConfigs.get(body.host) || {};
+      const ping = body.ping === undefined ? (cur.ping === undefined ? true : cur.ping) : !!body.ping;
+      if (onlineMs === 0 && ping === true) hostConfigs.delete(body.host);
+      else hostConfigs.set(body.host, { onlineMs: onlineMs === 0 ? (cur.onlineMs || 0) : onlineMs, ping });
       saveHostConfigs();
-      return sendJSON(res, 200, { ok: true, host: body.host, onlineMs: onlineMs || null });
+      return sendJSON(res, 200, { ok: true, host: body.host, onlineMs: onlineMs || null, ping });
     }
     return serveStatic(res, p);
   } catch (e) { console.error(e); sendJSON(res, 500, { error: e.message }); }
@@ -353,3 +396,7 @@ http.createServer(async (req, res) => {
 
 scan().then(() => console.log('indexed existing days:', [...dayStats.keys()].join(', ') || '(none)'));
 loadHostConfigs();
+if (PING_ENABLED) {
+  pingLoop().catch(() => {});
+  setInterval(() => { pingLoop().catch(() => {}); }, PING_INTERVAL_MS).unref();
+}
