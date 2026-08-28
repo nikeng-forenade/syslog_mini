@@ -72,6 +72,7 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
       <input id="q" placeholder="search…">
       <input id="host" placeholder="host…" list="hostList">
       <datalist id="hostList"></datalist>
+      <button id="clearFilters" title="Clear search, host and severity filters">✕ Clear</button>
       <select id="order" title="Sort order">
         <option value="desc">Newest first</option>
         <option value="asc">Oldest first</option>
@@ -84,8 +85,6 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
       <button data-sev="emerg,alert,crit,err">⚠ Problems</button>
       <button data-sev="warning,notice,info,debug">⚠️ Warning+</button>
       <button data-sev="debug">🐞 Debug</button>
-      <span style="flex:1"></span>
-      <button id="clearFilters" title="Clear search, host and severity filters">✕ Clear</button>
     </div>
     <div class="table">
       <table>
