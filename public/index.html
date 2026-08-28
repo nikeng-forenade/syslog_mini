@@ -29,7 +29,16 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
 #status.online{color:#22c55e;animation:blink 1.2s ease-in-out infinite;font-weight:600}
 #status.offline{color:#ef4444;animation:blink .8s ease-in-out infinite;font-weight:600}
 .online-dot{color:#22c55e}.offline-dot{color:#ef4444}
-#hosts{font-variant-numeric:tabular-nums}
+#hosts{font-variant-numeric:tabular-nums;cursor:pointer}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:50}
+.modal{background:var(--panel);border:1px solid var(--line);border-radius:10px;width:min(600px,94vw);max-height:80vh;display:flex;flex-direction:column;box-shadow:0 10px 40px rgba(0,0,0,.5)}
+.modal-header{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);font-weight:600}
+.modal-body{overflow:auto;padding:8px 16px}
+.modal-footer{padding:8px 16px;border-top:1px solid var(--line);font-size:12px}
+.host-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #1b202a;flex-wrap:wrap}
+.host-row .host-name{flex:1;min-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.host-row input[type=number]{width:74px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:5px;padding:4px 6px}
+.host-row .hint{color:var(--muted);font-size:11px}
 .muted{color:var(--muted)}
 </style>
 </head>
@@ -68,6 +77,15 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
       </table>
     </div>
   </main>
+</div>
+<div class="modal-overlay" id="hostsModal" style="display:none">
+  <div class="modal">
+    <div class="modal-header">📡 Syslog Hosts — set "online after" per device
+      <button id="closeHosts">✕</button>
+    </div>
+    <div class="modal-body" id="hostsList"></div>
+    <div class="modal-footer muted">0 or ↺ = server default (60s) · blank input saves default · changes apply immediately</div>
+  </div>
 </div>
 <script>
 const $ = (s) => document.querySelector(s);
@@ -176,6 +194,51 @@ function loadHosts() {
     })
     .catch(() => { $('#hosts').textContent = '—'; });
 }
+function fmtAgo(ms) {
+  if (ms < 60000) return Math.round(ms / 1000) + 's ago';
+  if (ms < 3600000) return Math.round(ms / 60000) + 'm ago';
+  return Math.round(ms / 3600000) + 'h ago';
+}
+
+function openHostsModal() {
+  const modal = $('#hostsModal');
+  modal.style.display = 'flex';
+  fetch('/api/hosts', { cache: 'no-store' })
+    .then((r) => r.ok ? r.json() : Promise.reject())
+    .then(({ online, offline }) => {
+      const rows = [...online, ...offline].map((h) => `
+        <div class="host-row" data-host="${esc(h.host)}">
+          <span class="${h.online ? 'online-dot' : 'offline-dot'}">●</span>
+          <span class="host-name" title="${esc(h.host)}">${esc(h.host)}</span>
+          <span class="hint">${fmtAgo(h.lastSeenAgoMs)}</span>
+          <label class="hint">online after</label>
+          <input type="number" min="0" max="86400" step="1" value="${Math.round((h.configuredMs || h.onlineMs) / 1000)}">
+          <button data-action="save">Save</button>
+          <button data-action="reset" title="Use default (60s)">↺</button>
+        </div>`).join('');
+      $('#hostsList').innerHTML = rows || '<div class="muted">no hosts seen yet</div>';
+    })
+    .catch(() => { $('#hostsList').innerHTML = '<div class="muted">unreachable</div>'; });
+}
+
+$('#hosts').onclick = openHostsModal;
+$('#closeHosts').onclick = () => { $('#hostsModal').style.display = 'none'; };
+$('#hostsModal').addEventListener('click', (e) => {
+  if (e.target === $('#hostsModal')) $('#hostsModal').style.display = 'none';
+});
+$('#hostsList').addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  const row = btn.closest('.host-row');
+  const host = row.dataset.host;
+  const onlineMs = btn.dataset.action === 'reset' ? 0 : Number(row.querySelector('input').value) * 1000;
+  fetch('/api/hosts/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ host, onlineMs }),
+  }).then((r) => r.ok ? openHostsModal() : alert('Save failed'));
+});
+
 checkHealth();
 loadHosts();
 loadDays();

@@ -96,8 +96,31 @@ function parse(buf, rinfo) {
 }
 
 // ---------- host tracking (online/offline counters) ----------
-const HOST_ONLINE_MS = Number(process.env.SYSLOG_HOST_ONLINE_MS || 60000); // seen within 60s = online
-const hosts = new Map(); // host -> { lastSeen }
+const HOST_ONLINE_MS = Number(process.env.SYSLOG_HOST_ONLINE_MS || 60000); // default: seen within 60s = online
+const HOST_CONFIG_FILE = path.join(LOG_DIR, 'hosts.json'); // per-host overrides, persisted
+const hosts = new Map();        // host -> { lastSeen }
+const hostConfigs = new Map();  // host -> { onlineMs } (0/absent = use default)
+
+function loadHostConfigs() {
+  try {
+    const data = JSON.parse(fs.readFileSync(HOST_CONFIG_FILE, 'utf8'));
+    for (const [k, v] of Object.entries(data)) {
+      const ms = Number(v && v.onlineMs);
+      if (Number.isFinite(ms) && ms > 0) hostConfigs.set(k, { onlineMs: ms });
+    }
+  } catch {}
+}
+
+function saveHostConfigs() {
+  const obj = {};
+  for (const [k, v] of hostConfigs) obj[k] = { onlineMs: v.onlineMs };
+  try { fs.writeFileSync(HOST_CONFIG_FILE, JSON.stringify(obj, null, 2)); } catch {}
+}
+
+function effectiveOnlineMs(host) {
+  const c = hostConfigs.get(host);
+  return c ? c.onlineMs : HOST_ONLINE_MS;
+}
 
 function noteHost(host, rinfo) {
   const key = (host && host !== '-') ? host : ((rinfo && rinfo.address) || 'unknown');
@@ -118,8 +141,14 @@ function pruneHosts() {
 function hostCounts() {
   const now = Date.now();
   const online = [], offline = [];
-  for (const [k, rec] of hosts) ((now - rec.lastSeen) < HOST_ONLINE_MS ? online : offline).push(k);
-  online.sort(); offline.sort();
+  for (const [k, rec] of hosts) {
+    const onlineMs = effectiveOnlineMs(k);
+    const isOnline = (now - rec.lastSeen) < onlineMs;
+    const item = { host: k, online: isOnline, onlineMs, configuredMs: (hostConfigs.get(k) || {}).onlineMs || null, lastSeen: rec.lastSeen, lastSeenAgoMs: now - rec.lastSeen };
+    (isOnline ? online : offline).push(item);
+  }
+  online.sort((a, b) => a.host.localeCompare(b.host));
+  offline.sort((a, b) => a.host.localeCompare(b.host));
   return { online, offline, onlineCount: online.length, offlineCount: offline.length };
 }
 
@@ -153,6 +182,15 @@ const sendJSON = (res, code, obj) => {
   res.writeHead(code, { 'Content-Type': 'application/json' });
   res.end(b);
 };
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', (c) => { data += c; if (data.length > 1e6) { req.destroy(); reject(new Error('body too large')); } });
+    req.on('end', () => { try { resolve(JSON.parse(data || '{}')); } catch (e) { reject(new Error('invalid json')); } });
+    req.on('error', reject);
+  });
+}
 
 async function readLogs(date, { q, host, severity, limit, offset }) {
   if (!fs.existsSync(fileOf(date))) return { total: 0, logs: [] };
@@ -288,6 +326,16 @@ http.createServer(async (req, res) => {
       pruneHosts();
       return sendJSON(res, 200, { ...hostCounts() });
     }
+    if (p === '/api/hosts/config' && req.method === 'PUT') {
+      const body = await readBody(req);
+      const ms = Number(body.onlineMs);
+      if (!body.host || !Number.isFinite(ms) || ms < 0) return sendJSON(res, 400, { error: 'host and onlineMs (seconds>=0) required' });
+      const onlineMs = Math.min(ms, 86400000);
+      if (onlineMs === 0) hostConfigs.delete(body.host);
+      else hostConfigs.set(body.host, { onlineMs });
+      saveHostConfigs();
+      return sendJSON(res, 200, { ok: true, host: body.host, onlineMs: onlineMs || null });
+    }
     return serveStatic(res, p);
   } catch (e) { console.error(e); sendJSON(res, 500, { error: e.message }); }
 }).listen(HTTP_PORT, HTTP_HOST, () => {
@@ -297,3 +345,4 @@ http.createServer(async (req, res) => {
 });
 
 scan().then(() => console.log('indexed existing days:', [...dayStats.keys()].join(', ') || '(none)'));
+loadHostConfigs();
