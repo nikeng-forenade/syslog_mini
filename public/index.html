@@ -35,6 +35,7 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
 .online-dot{color:#22c55e}.offline-dot{color:#ef4444}
 #hosts{font-variant-numeric:tabular-nums;cursor:pointer}
 #ver{font-size:11px;background:var(--line);padding:2px 8px;border-radius:10px}
+#disk{font-size:11px;background:var(--line);padding:2px 8px;border-radius:10px;font-variant-numeric:tabular-nums}
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:50}
 .modal{background:var(--panel);border:1px solid var(--line);border-radius:10px;width:min(600px,94vw);max-height:80vh;display:flex;flex-direction:column;box-shadow:0 10px 40px rgba(0,0,0,.5)}
 .modal-header{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);font-weight:600}
@@ -55,6 +56,7 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
   <span id="status" class="muted">…</span>
   <span id="hosts" class="muted" title="Known syslog sources">…</span>
   <span id="ver" class="muted" title="Server version">…</span>
+  <span id="disk" class="muted" title="Disk space left on the server">💾 …</span>
   <div style="flex:1"></div>
   <label class="muted"><input type="checkbox" id="autorefresh" checked> auto</label>
   <button id="backupsBtn" title="Manage backups">🗄</button>
@@ -239,6 +241,17 @@ function checkHealth() {
     .then((h) => { setStatus(h.ok !== false); $('#ver').textContent = h.version ? 'v' + h.version : ''; })
     .catch(() => setStatus(false));
 }
+function loadDisk() {
+  fetch('/api/disk', { cache: 'no-store' })
+    .then((r) => r.ok ? r.json() : Promise.reject())
+    .then((d) => {
+      const el = $('#disk');
+      el.textContent = '💾 ' + fmtSize(d.free || 0) + ' left';
+      const pct = d.percent || 0;
+      el.style.color = pct >= 90 ? '#ef4444' : pct >= 75 ? '#f59e0b' : '';
+    })
+    .catch(() => { $('#disk').textContent = '💾 —'; });
+}
 function loadHosts() {
   fetch('/api/hosts', { cache: 'no-store' })
     .then((r) => r.ok ? r.json() : Promise.reject())
@@ -361,8 +374,9 @@ $('#backupsList').addEventListener('click', (e) => {
 
 checkHealth();
 loadHosts();
+loadDisk();
 loadDays();
-timer = setInterval(() => { loadDays(); refresh(); checkHealth(); loadHosts(); }, 5000);
+timer = setInterval(() => { loadDays(); refresh(); checkHealth(); loadHosts(); loadDisk(); }, 5000);
 </script>
 </body>
 </html>
