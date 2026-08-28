@@ -25,6 +25,10 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
 .notice{background:#2563eb}.info{background:#4b5563}.debug{background:#374151}
 .msg{white-space:pre-wrap;word-break:break-word}.del{opacity:.4}tr:hover .del{opacity:1}
 .day .del{opacity:.9;padding:2px 6px;font-size:12px}.day:hover .del{opacity:1}
+.chips{display:flex;gap:6px;padding:6px 12px;flex-wrap:wrap;border-bottom:1px solid var(--line);align-items:center}
+.chips button{font-size:12px;padding:2px 10px}
+.chips button.active{background:var(--accent);border-color:var(--accent);color:#fff}
+.hostlink{color:var(--accent);text-decoration:none;cursor:pointer}.hostlink:hover{text-decoration:underline}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.25}}
 #status.online{color:#22c55e;animation:blink 1.2s ease-in-out infinite;font-weight:600}
 #status.offline{color:#ef4444;animation:blink .8s ease-in-out infinite;font-weight:600}
@@ -61,14 +65,21 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
   <main>
     <div class="filters">
       <input id="q" placeholder="search…">
-      <select id="sev">
-        <option value="">all levels</option><option>emerg</option><option>alert</option>
-        <option>crit</option><option>err</option><option>warning</option><option>notice</option>
-        <option>info</option><option>debug</option>
-      </select>
       <input id="host" placeholder="host…">
+      <select id="order" title="Sort order">
+        <option value="desc">Newest first</option>
+        <option value="asc">Oldest first</option>
+      </select>
       <button id="export" title="Download filtered view as CSV">⬇ CSV</button>
       <span id="total" class="muted"></span>
+    </div>
+    <div class="chips" id="chips">
+      <button data-sev="" class="active">All</button>
+      <button data-sev="emerg,alert,crit,err">⚠ Problems</button>
+      <button data-sev="warning,notice,info,debug">⚠️ Warning+</button>
+      <button data-sev="debug">🐞 Debug</button>
+      <span style="flex:1"></span>
+      <button id="clearFilters" title="Clear search, host and severity filters">✕ Clear</button>
     </div>
     <div class="table">
       <table>
@@ -89,7 +100,7 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
 </div>
 <script>
 const $ = (s) => document.querySelector(s);
-let current = '', timer = null, daysData = [];
+let current = '', timer = null, daysData = [], sevFilter = '';
 const api = async (p, o) => { const r = await fetch(p, o); if (!r.ok) throw new Error(await r.text()); return r.json(); };
 const esc = (s) => s.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmtSize = (b) => b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB' : b >= 1e6 ? (b / 1e6).toFixed(2) + ' MB' : b >= 1e3 ? (b / 1e3).toFixed(1) + ' KB' : b + ' B';
@@ -127,6 +138,11 @@ function delEntry(id) {
   });
 }
 
+function filterHost(host) {
+  $('#host').value = host;
+  refresh();
+}
+
 function refresh() {
   if (!current) {
     $('#rows').innerHTML = '<tr><td colspan="6" class="muted">select a day</td></tr>';
@@ -135,15 +151,16 @@ function refresh() {
   }
   const qs = new URLSearchParams({ date: current, limit: 500 });
   if ($('#q').value) qs.set('q', $('#q').value);
-  if ($('#sev').value) qs.set('severity', $('#sev').value);
+  if (sevFilter) qs.set('severity', sevFilter);
   if ($('#host').value) qs.set('host', $('#host').value);
+  qs.set('order', $('#order').value);
   api('/api/logs?' + qs).then(({ logs, total }) => {
     const day = daysData.find((d) => d.date === current);
     $('#total').textContent = day ? `${total} entries · ${fmtSize(day.size)}` : `${total} entries`;
     $('#rows').innerHTML = logs.map((e) => `
       <tr>
         <td class="muted">${new Date(e.ts).toLocaleString()}</td>
-        <td>${esc(e.host)}</td>
+        <td><a href="#" class="hostlink" data-host="${esc(e.host)}" title="Filter by this host" onclick="event.preventDefault();filterHost(this.dataset.host)">${esc(e.host)}</a></td>
         <td><span class="sev ${e.severity}">${e.severity}</span></td>
         <td class="muted">${esc(e.tag)}</td>
         <td class="msg">${esc(e.msg)}</td>
@@ -165,15 +182,28 @@ $('#export').onclick = () => {
   if (!current) return;
   const qs = new URLSearchParams({ date: current });
   if ($('#q').value) qs.set('q', $('#q').value);
-  if ($('#sev').value) qs.set('severity', $('#sev').value);
+  if (sevFilter) qs.set('severity', sevFilter);
   if ($('#host').value) qs.set('host', $('#host').value);
+  qs.set('order', $('#order').value);
   window.location = '/api/export?' + qs;
 };
 $('#autorefresh').onchange = () => {
   clearInterval(timer);
   if ($('#autorefresh').checked) timer = setInterval(() => { loadDays(); refresh(); }, 5000);
 };
-['#q', '#sev', '#host'].forEach((s) => $(s).addEventListener('input', refresh));
+['#q', '#host', '#order'].forEach((s) => $(s).addEventListener('input', refresh));
+$('#chips').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-sev]');
+  if (!b) return;
+  sevFilter = b.dataset.sev;
+  document.querySelectorAll('#chips button[data-sev]').forEach((x) => x.classList.toggle('active', x === b));
+  refresh();
+});
+$('#clearFilters').onclick = () => {
+  $('#q').value = ''; $('#host').value = ''; sevFilter = '';
+  document.querySelectorAll('#chips button[data-sev]').forEach((x) => x.classList.toggle('active', x.dataset.sev === ''));
+  refresh();
+};
 function setStatus(ok) {
   const el = $('#status');
   el.textContent = ok ? '● online' : '● offline';
