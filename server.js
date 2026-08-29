@@ -2,9 +2,10 @@
 'use strict';
 // Zero-dependency syslog server for a light LXC container.
 //  - UDP + TCP receivers on port 514 (RFC 3164 + RFC 5424)
-//  - one JSON Lines file per day: logs/YYYY-MM-DD.jsonl
+//  - SQLite storage (built-in node:sqlite) in one DB file: <SYSLOG_LOG_DIR>/syslog.db
 //  - web GUI + REST API on port 8080 (single static file in ./public)
 //  - per-day and per-entry delete, optional retention sweep
+//  - requires Node.js >= 22.5 for node:sqlite (recommended: Node 24 LTS)
 //
 // Env vars:
 //   SYSLOG_HOST        bind address for UDP/TCP receivers (default 0.0.0.0)
@@ -12,7 +13,7 @@
 //   SYSLOG_TCP_PORT    default 514
 //   SYSLOG_HTTP_HOST   GUI bind address (default 0.0.0.0; use 127.0.0.1 for local-only)
 //   SYSLOG_HTTP_PORT   default 8080
-//   SYSLOG_LOG_DIR     default ./logs
+//   SYSLOG_LOG_DIR     default ./logs  (holds syslog.db + hosts.json)
 //   SYSLOG_RETENTION   auto-delete days older than N (0 = keep all)
 const http      = require('http');
 const dgram     = require('dgram');
@@ -21,11 +22,11 @@ const fs        = require('fs');
 const fsp       = fs.promises;
 const path      = require('path');
 const os        = require('os');
-const readline  = require('readline');
 const crypto    = require('crypto');
+const { DatabaseSync } = require('node:sqlite');
 const { execFile, exec } = require('child_process');
 
-const VERSION = '1.4.0'; // bump on every release; shown in the GUI header
+const VERSION = '1.5.0'; // bump on every release; shown in the GUI header
 
 const HOST      = process.env.SYSLOG_HOST       || '0.0.0.0';
 const UDP_PORT  = Number(process.env.SYSLOG_UDP_PORT  || 514);
@@ -38,45 +39,43 @@ const RETENTION = Number(process.env.SYSLOG_RETENTION || 0); // days, 0 = keep a
 
 fs.mkdirSync(LOG_DIR, { recursive: true });
 
-// ---------- daily files ----------
-const dayStats = new Map();   // date -> { count, size }
-const appendQ  = new Map();   // date -> promise chain (serialize appends)
+// ---------- SQLite storage (built-in node:sqlite) ----------
+const DB_FILE = process.env.SYSLOG_DB_FILE || path.join(LOG_DIR, 'syslog.db');
+const db = new DatabaseSync(DB_FILE);
+db.exec(`
+  PRAGMA journal_mode = WAL;
+  CREATE TABLE IF NOT EXISTS logs (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts_ms    INTEGER NOT NULL,
+    date     TEXT    NOT NULL,
+    host     TEXT    NOT NULL DEFAULT '',
+    facility TEXT    NOT NULL DEFAULT '',
+    severity TEXT    NOT NULL DEFAULT '',
+    tag      TEXT    NOT NULL DEFAULT '',
+    msg      TEXT    NOT NULL DEFAULT ''
+  );
+  CREATE INDEX IF NOT EXISTS idx_logs_date ON logs(date, ts_ms);
+  CREATE INDEX IF NOT EXISTS idx_logs_host ON logs(host);
+  CREATE INDEX IF NOT EXISTS idx_logs_sev  ON logs(severity);
+`);
+const insertLog = db.prepare(
+  'INSERT INTO logs (ts_ms, date, host, facility, severity, tag, msg) VALUES (?, ?, ?, ?, ?, ?, ?)'
+);
+
 const pad = (n) => String(n).padStart(2, '0');
 const dateStr = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const fileOf  = (date) => path.join(LOG_DIR, `${date}.jsonl`);
 
-function bump(date, delta, bytes = 0) {
-  const s = dayStats.get(date) || { count: 0, size: 0 };
-  s.count = Math.max(0, s.count + delta);
-  s.size  = Math.max(0, s.size + bytes);
-  dayStats.set(date, s);
-}
-
-function append(date, line) {
-  const prev = appendQ.get(date) || Promise.resolve();
-  const next = prev
-    .then(() => fsp.appendFile(fileOf(date), line + '\n', 'utf8'))
-    .then(() => bump(date, 1, Buffer.byteLength(line) + 1))
-    .catch((e) => console.error('append failed:', e));
-  appendQ.set(date, next);
-  next.finally(() => { if (appendQ.get(date) === next) appendQ.delete(date); });
-  return next;
-}
+const rowToEntry = (r) => ({
+  id: r.id, ts: new Date(r.ts_ms).toISOString(),
+  host: r.host, facility: r.facility, severity: r.severity, tag: r.tag, msg: r.msg
+});
 
 // ---------- self-monitoring (disk full warning) ----------
 const DISK_WARN_PCT = Number(process.env.SYSLOG_DISK_WARN_PCT || 5); // % free that triggers an err entry
 let diskLow = false;
 
 function logSelf(severity, msg) {
-  append(dateStr(), JSON.stringify({
-    id: crypto.createHash('sha1').update(`${Date.now()}:${Math.random()}`).digest('hex').slice(0, 12),
-    ts: new Date().toISOString(),
-    host: os.hostname(),
-    facility: 'syslog',
-    severity,
-    tag: 'syslog',
-    msg
-  }));
+  store({ ts: new Date().toISOString(), host: os.hostname(), facility: 'syslog', severity, tag: 'syslog', msg }, null);
 }
 
 function diskFreePct() {
@@ -245,29 +244,21 @@ function hostCounts() {
 async function hostsInLogs() {
   const set = new Set();
   for (const k of hosts.keys()) if (k && k !== '-' && k !== 'unknown') set.add(k);
-  let files = [];
-  try { files = fs.readdirSync(LOG_DIR).filter((f) => f.endsWith('.jsonl')); } catch {}
-  for (const f of files) {
-    try {
-      const rl = readline.createInterface({ input: fs.createReadStream(path.join(LOG_DIR, f)), crlfDelay: Infinity });
-      for await (const line of rl) {
-        if (!line.trim()) continue;
-        let e; try { e = JSON.parse(line); } catch { continue; }
-        if (e && e.host && e.host !== '-' && e.host !== 'unknown') set.add(e.host);
-      }
-    } catch {}
-  }
+  for (const r of db.prepare(`SELECT DISTINCT host FROM logs WHERE host != '' AND host != '-' AND host != 'unknown'`).all()) set.add(r.host);
   return [...set].sort((a, b) => a.localeCompare(b));
 }
 
-const store = (entry, rinfo) => {
+function store(entry, rinfo) {
   noteHost(entry.host, rinfo);
-  return append(dateStr(new Date(entry.ts)), JSON.stringify(entry));
-};
+  const t = new Date(entry.ts).getTime();
+  try {
+    insertLog.run(Number.isFinite(t) ? t : Date.now(), dateStr(new Date(t)), entry.host, entry.facility, entry.severity, entry.tag, entry.msg);
+  } catch (e) { console.error('store failed:', e); }
+}
 
 // ---------- receivers ----------
 const udp = dgram.createSocket('udp4');
-udp.on('message', (b, r) => store(parse(b, r), r).catch(() => {}));
+udp.on('message', (b, r) => { try { store(parse(b, r), r); } catch {} });
 udp.on('error', (e) => console.error('UDP error:', e));
 udp.bind(UDP_PORT, HOST);
 
@@ -279,7 +270,7 @@ net.createServer((sock) => {
     let i;
     while ((i = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, i); buf = buf.slice(i + 1);
-      if (line.trim()) store(parse(Buffer.from(line), { address: sock.remoteAddress }), { address: sock.remoteAddress }).catch(() => {});
+      if (line.trim()) { try { store(parse(Buffer.from(line), { address: sock.remoteAddress }), { address: sock.remoteAddress }); } catch {} }
     }
   });
 }).listen(TCP_PORT, HOST);
@@ -340,30 +331,22 @@ function pruneBackups() {
   while (dirs.length > backupKeep) { const oldest = dirs.shift(); try { fs.rmSync(path.join(BACKUP_DIR, oldest), { recursive: true, force: true }); } catch {} }
 }
 
+function buildWhere(date, q, host, severity) {
+  const conds = [], params = [];
+  if (date && date !== 'all') { conds.push('date = ?'); params.push(date); }
+  if (q) { conds.push('(msg LIKE ? OR tag LIKE ?)'); const like = `%${q}%`; params.push(like, like); }
+  if (host) { conds.push('host = ?'); params.push(host); }
+  const sevs = (severity || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (sevs.length) { conds.push(`severity IN (${sevs.map(() => '?').join(',')})`); params.push(...sevs); }
+  return { where: conds.length ? ' WHERE ' + conds.join(' AND ') : '', params };
+}
+
 async function readLogs(date, { q, host, severity, limit, offset, order }) {
-  let files = [];
-  if (date === 'all') {
-    try { files = fs.readdirSync(LOG_DIR).filter((f) => f.endsWith('.jsonl')).sort(); } catch {}
-  } else {
-    files = [path.basename(fileOf(date))];
-  }
-  const all = [];
-  for (const f of files) {
-    const fp = path.join(LOG_DIR, f);
-    if (!fs.existsSync(fp)) continue;
-    const rl = readline.createInterface({ input: fs.createReadStream(fp), crlfDelay: Infinity });
-    for await (const line of rl) {
-      if (!line.trim()) continue;
-      let e; try { e = JSON.parse(line); } catch { continue; }
-      if (q && !(e.msg + ' ' + e.tag).toLowerCase().includes(q.toLowerCase())) continue;
-      if (host && e.host !== host) continue;
-      if (severity && !severity.split(',').includes(e.severity)) continue;
-      all.push(e);
-    }
-  }
-  const t = (e) => { const n = new Date(e.ts).getTime(); return Number.isFinite(n) ? n : 0; };
-  all.sort((a, b) => (order === 'desc' ? t(b) - t(a) : t(a) - t(b)));
-  return { total: all.length, logs: all.slice(offset, offset + limit) };
+  const { where, params } = buildWhere(date, q, host, severity);
+  const dir = order === 'desc' ? 'DESC' : 'ASC';
+  const total = db.prepare(`SELECT COUNT(*) c FROM logs${where}`).get(...params).c;
+  const rows = db.prepare(`SELECT * FROM logs${where} ORDER BY ts_ms ${dir}, id ${dir} LIMIT ? OFFSET ?`).all(...params, limit, offset);
+  return { total, logs: rows.map(rowToEntry) };
 }
 
 // ── CSV export ─────────────────────────────────────────────
@@ -372,7 +355,7 @@ const csvField = (v) => {
   return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 };
 
-async function exportLogsCsv(res, date, { q, host, severity, order }) {
+function exportLogsCsv(res, date, { q, host, severity, order }) {
   res.on('error', () => {}); // client disconnected mid-stream
   const filename = `syslog-${date}.csv`;
   res.writeHead(200, {
@@ -380,49 +363,17 @@ async function exportLogsCsv(res, date, { q, host, severity, order }) {
     'Content-Disposition': `attachment; filename="${filename}"`,
   });
   res.write('\uFEFF'); // UTF-8 BOM so Excel opens it correctly
-  const rows = [];
-  let files = [];
-  if (date === 'all') {
-    try { files = fs.readdirSync(LOG_DIR).filter((f) => f.endsWith('.jsonl')).sort(); } catch {}
-  } else {
-    files = [path.basename(fileOf(date))];
-  }
-  for (const f of files) {
-    const fp = path.join(LOG_DIR, f);
-    if (!fs.existsSync(fp)) continue;
-    const rl = readline.createInterface({ input: fs.createReadStream(fp), crlfDelay: Infinity });
-    for await (const line of rl) {
-      if (!line.trim()) continue;
-      let e; try { e = JSON.parse(line); } catch { continue; }
-      if (q && !(e.msg + ' ' + e.tag).toLowerCase().includes(q.toLowerCase())) continue;
-      if (host && e.host !== host) continue;
-      if (severity && !severity.split(',').includes(e.severity)) continue;
-      rows.push([e.ts, e.host, e.facility, e.severity, e.tag, e.msg].map(csvField).join(','));
-    }
-  }
+  const { where, params } = buildWhere(date, q, host, severity);
+  const rows = db.prepare(`SELECT * FROM logs${where} ORDER BY ts_ms ASC, id ASC`).all(...params);
   if (order === 'desc') rows.reverse();
   res.write('timestamp,host,facility,severity,tag,message\n');
-  for (const r of rows) res.write(r + '\n');
+  for (const r of rows) res.write([new Date(r.ts_ms).toISOString(), r.host, r.facility, r.severity, r.tag, r.msg].map(csvField).join(',') + '\n');
   return res.end();
 }
 
-async function deleteEntry(date, id) {
-  const file = fileOf(date);
-  if (!fs.existsSync(file)) return false;
-  const tmp = file + '.tmp';
-  const w = fs.createWriteStream(tmp);
-  const rl = readline.createInterface({ input: fs.createReadStream(file) });
-  let removed = 0;
-  for await (const line of rl) {
-    if (!line.trim()) continue;
-    let e; try { e = JSON.parse(line); } catch { w.write(line + '\n'); continue; }
-    if (e.id === id) { removed++; continue; }
-    w.write(line + '\n');
-  }
-  await new Promise((r) => w.end(r));
-  await fsp.rename(tmp, file);
-  if (removed) bump(date, -removed);
-  return removed > 0;
+function deleteEntry(date, id) {
+  const r = db.prepare('DELETE FROM logs WHERE id = ?').run(id);
+  return r.changes > 0;
 }
 
 async function serveStatic(res, p) {
@@ -438,21 +389,24 @@ async function serveStatic(res, p) {
 async function sweep() {
   if (!RETENTION) return;
   const cutoff = dateStr(new Date(Date.now() - RETENTION * 864e5));
-  for (const [date] of dayStats) if (date < cutoff) {
-    await fsp.unlink(fileOf(date)).catch(() => {});
-    dayStats.delete(date);
-  }
+  const r = db.prepare('DELETE FROM logs WHERE date < ?').run(cutoff);
+  if (r.changes) console.log(`[syslog] retention: purged ${r.changes} entries older than ${cutoff}`);
 }
 
-async function scan() {
-  for (const f of await fsp.readdir(LOG_DIR).catch(() => [])) {
-    if (!f.endsWith('.jsonl')) continue;
-    const date = f.slice(0, 10);
-    let count = 0;
-    const rl = readline.createInterface({ input: fs.createReadStream(fileOf(date)) });
-    for await (const line of rl) count++;
-    dayStats.set(date, { count, size: (await fsp.stat(fileOf(date))).size });
-  }
+function daysList() {
+  return db.prepare(`
+    SELECT date, COUNT(*) AS count,
+           SUM(LENGTH(msg) + LENGTH(host) + LENGTH(tag) + LENGTH(facility) + LENGTH(severity) + 96) AS size
+    FROM logs GROUP BY date
+  `).all();
+}
+
+function backupDb(dir) {
+  try {
+    const target = path.join(dir, 'syslog.db');
+    fs.rmSync(target, { force: true }); // VACUUM INTO requires the target to not exist
+    db.exec(`VACUUM INTO '${target.replace(/'/g, "''")}'`);
+  } catch (e) { console.error('db snapshot failed:', e); }
 }
 
 http.createServer(async (req, res) => {
@@ -460,8 +414,7 @@ http.createServer(async (req, res) => {
   const p = url.pathname, s = url.searchParams;
   try {
     if (p === '/api/days') {
-      const days = [...dayStats.entries()].sort((a, b) => b[0].localeCompare(a[0]))
-        .map(([date, st]) => ({ date, count: st.count, size: st.size }));
+      const days = daysList().sort((a, b) => b.date.localeCompare(a.date));
       return sendJSON(res, 200, { days });
     }
     if (p === '/api/logs' && req.method === 'GET') {
@@ -479,15 +432,13 @@ http.createServer(async (req, res) => {
         order: s.get('order') === 'desc' ? 'desc' : 'asc' });
     }
     if (p === '/api/logs/all' && req.method === 'DELETE') {
-      for (const [date] of dayStats) await fsp.unlink(fileOf(date)).catch(() => {});
-      dayStats.clear();
-      return sendJSON(res, 200, { ok: true, deleted: 'all' });
+      const r = db.prepare('DELETE FROM logs').run();
+      return sendJSON(res, 200, { ok: true, deleted: 'all', count: r.changes });
     }
     if (p === '/api/logs' && req.method === 'DELETE') {
       const date = s.get('date');
-      await fsp.unlink(fileOf(date)).catch(() => {});
-      dayStats.delete(date);
-      return sendJSON(res, 200, { ok: true, deleted: date });
+      const r = db.prepare('DELETE FROM logs WHERE date = ?').run(date);
+      return sendJSON(res, 200, { ok: true, deleted: date, count: r.changes });
     }
     if (p === '/api/entry' && req.method === 'DELETE') {
       const ok = await deleteEntry(s.get('date'), s.get('id'));
@@ -550,6 +501,10 @@ http.createServer(async (req, res) => {
       const restored = [];
       if (fs.existsSync(path.join(src, 'server.js'))) { await fsp.copyFile(path.join(src, 'server.js'), path.join(APP_DIR, 'server.js')); restored.push('server.js'); }
       if (fs.existsSync(path.join(src, 'index.html'))) { await fsp.copyFile(path.join(src, 'index.html'), path.join(APP_DIR, 'public', 'index.html')); restored.push('index.html'); }
+      if (fs.existsSync(path.join(src, 'syslog.db'))) {
+        try { db.close(); await fsp.copyFile(path.join(src, 'syslog.db'), DB_FILE); restored.push('syslog.db (logs)'); }
+        catch (e) { console.error('db restore failed:', e); }
+      }
       setTimeout(() => { try { exec('systemctl restart syslog-server', () => {}); } catch {} }, 400);
       return sendJSON(res, 200, { ok: true, restored, restarting: true });
     }
@@ -570,6 +525,7 @@ http.createServer(async (req, res) => {
       await fsp.mkdir(BACKUP, { recursive: true });
       await fsp.copyFile(path.join(APP_DIR, 'server.js'), path.join(BACKUP, 'server.js'));
       await fsp.copyFile(path.join(APP_DIR, 'public', 'index.html'), path.join(BACKUP, 'index.html'));
+      backupDb(BACKUP);
       await fsp.writeFile(path.join(APP_DIR, 'server.js'), serverJs);
       await fsp.writeFile(path.join(APP_DIR, 'public', 'index.html'), indexHtml);
       pruneBackups();
@@ -579,14 +535,13 @@ http.createServer(async (req, res) => {
     return serveStatic(res, p);
   } catch (e) { console.error(e); sendJSON(res, 500, { error: e.message }); }
 }).listen(HTTP_PORT, HTTP_HOST, () => {
-  console.log(`syslog up — UDP/TCP :${UDP_PORT}/${TCP_PORT}, GUI http://${HTTP_HOST}:${HTTP_PORT}, dir ${LOG_DIR}`);
+  console.log(`syslog up — UDP/TCP :${UDP_PORT}/${TCP_PORT}, GUI http://${HTTP_HOST}:${HTTP_PORT}, db ${DB_FILE}`);
   sweep();
   checkDisk();
   setInterval(() => { sweep(); pruneHosts(); }, 3600e3).unref();
   setInterval(() => { checkDisk(); }, 15 * 60e3).unref();
 });
 
-scan().then(() => console.log('indexed existing days:', [...dayStats.keys()].join(', ') || '(none)'));
 loadHostConfigs();
 loadSettings();
 if (PING_ENABLED) {

@@ -30,7 +30,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --port PORT           GUI/API HTTP port (default: 8080)"
       echo "  --udp-port PORT       UDP syslog port (default: 514)"
       echo "  --tcp-port PORT       TCP syslog port (default: 514)"
-      echo "  --log-dir DIR         Log storage dir, one .jsonl per day (default: /var/log/syslog-server)"
+      echo "  --log-dir DIR         Log storage dir, holds syslog.db (default: /var/log/syslog-server)"
       echo "  --retention DAYS      Auto-delete days older than N (default: 30, 0 = keep all)"
       echo "  --keep-rsyslog        Don't disable local rsyslog (may conflict on port 514)"
       echo "  --help                Show this help"
@@ -57,10 +57,10 @@ fi
 # ── Update system ──────────────────────────────────────────
 apt-get update && apt-get upgrade -y
 
-# ── Install Node.js 20.x ───────────────────────────────────
+# ── Install Node.js 24.x ───────────────────────────────────
 if ! command -v node &>/dev/null; then
-  echo "Installing Node.js 20.x..."
-  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+  echo "Installing Node.js 24.x..."
+  curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
   apt-get update
   apt-get install -y nodejs
 fi
@@ -136,7 +136,7 @@ echo ""
 echo "=== Done! Syslog server is running ==="
 echo "GUI:     http://<container-ip>:$PORT"
 echo "UDP/TCP: :$UDP_PORT / :$TCP_PORT"
-echo "Logs:    $LOG_DIR (one file per day)"
+echo "Logs:    $LOG_DIR (SQLite DB: syslog.db)"
 echo ""
 echo "Check status: systemctl status syslog-server"
 echo "View logs:    journalctl -u syslog-server -f"

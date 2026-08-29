@@ -9,7 +9,7 @@
 #
 # Env knobs:
 #   GIT_REPO          fetch source from git instead of local files
-#   NODE_MAJOR        Node major version to install (default 20)
+#   NODE_MAJOR        Node major version to install (default 24)
 #   INSTALL_DIR       target install dir (default /opt/syslog-server)
 #   LOG_DIR           log storage dir (default /var/log/syslog-server)
 #   HTTP_PORT         GUI/API port (default 8080)
@@ -20,7 +20,7 @@
 set -euo pipefail
 
 GIT_REPO="${GIT_REPO:-}"
-NODE_MAJOR="${NODE_MAJOR:-20}"
+NODE_MAJOR="${NODE_MAJOR:-24}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/syslog-server}"
 LOG_DIR="${LOG_DIR:-/var/log/syslog-server}"
 HTTP_PORT="${HTTP_PORT:-8080}"
@@ -139,7 +139,7 @@ cat <<EOF
 
 ✅ Syslog server installed.
   GUI / API : http://${IP}:${HTTP_PORT}
-  Log dir   : $LOG_DIR   (one .jsonl file per day)
+  Log dir   : $LOG_DIR   (SQLite DB: syslog.db)
   Service   : systemctl status syslog-server
 
 Point your hosts at it (rsyslog example):

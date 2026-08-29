@@ -1,7 +1,8 @@
 # 📟 Syslog Server — LXC Deployment
 
 Fast, light syslog server for a Proxmox LXC: UDP+TCP receiver (RFC 3164/5424),
-one file per day, web GUI, per-day + per-entry delete. Zero npm dependencies.
+SQLite storage (built-in `node:sqlite`), web GUI, per-day + per-entry delete.
+Zero npm dependencies. Requires Node.js ≥ 22.5 (recommended: 24 LTS).
 
 ## Option 1: Proxmox VE — Paste & Run
 
@@ -45,8 +46,8 @@ bash lxc/install.sh --port 8080 --udp-port 5514 --retention 7
 ## Option 3: Manual setup inside a Debian/Ubuntu LXC
 
 ```bash
-# Install Node.js 20
-curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+# Install Node.js 24 (LTS)
+curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
 apt-get install -y nodejs
 
 # Copy the project to /opt/syslog-server, then:
@@ -63,7 +64,7 @@ systemctl enable --now syslog-server
 | `--port PORT` | GUI/API HTTP port (default: 8080) |
 | `--udp-port PORT` | UDP syslog port (default: 514) |
 | `--tcp-port PORT` | TCP syslog port (default: 514) |
-| `--log-dir DIR` | Log storage dir, one `.jsonl` per day (default: `/var/log/syslog-server`) |
+| `--log-dir DIR` | Log storage dir, holds SQLite `syslog.db` (default: `/var/log/syslog-server`) |
 | `--retention DAYS` | Auto-delete days older than N (default: 30, 0 = keep all) |
 | `--keep-rsyslog` | Don't disable local rsyslog (may conflict on port 514) |
 | `--help` | Show usage help |
@@ -100,10 +101,12 @@ pct exec <CTID> -- bash -c "$(curl -fsSL https://raw.githubusercontent.com/niken
 ```
 
 What it does: re-downloads `server.js` + `public/index.html`, backs up the
-current version to `/opt/syslog-server/backups/<timestamp>/`, installs the new
-files, and restarts the service. It also self-heals DNS if resolution fails
-(injects `1.1.1.1`/`8.8.8.8`). Set `GITHUB_OWNER`/`GITHUB_REPO`/`GITHUB_BRANCH`
-if you host it elsewhere.
+current version — including a safe online snapshot of `syslog.db` — to
+`/opt/syslog-server/backups/<timestamp>/`, installs the new files, and
+restarts the service. It auto-upgrades Node.js to 24 LTS if the installed
+version is too old for the SQLite backend (Node ≥ 22.5 required), and
+self-heals DNS if resolution fails (injects `1.1.1.1`/`8.8.8.8`). Set
+`GITHUB_OWNER`/`GITHUB_REPO`/`GITHUB_BRANCH` if you host it elsewhere.
 
 Old backups are **pruned automatically** — only the newest `BACKUP_KEEP` are kept
 (default 3, e.g. `BACKUP_KEEP=5 pct exec <CTID> -- bash /root/update.sh`).
@@ -115,7 +118,7 @@ Old backups are **pruned automatically** — only the newest `BACKUP_KEEP` are k
 | OS | Debian 12 LXC (unprivileged, 1 core, 512 MB, 4 GB disk) |
 | GUI | Port 8080 |
 | Syslog | UDP + TCP port 514 |
-| Logs | `/var/log/syslog-server/YYYY-MM-DD.jsonl` |
+| Logs | SQLite DB: `/var/log/syslog-server/syslog.db` |
 | Retention | 30 days (auto-purged) |
 
 ## Point your hosts at it
