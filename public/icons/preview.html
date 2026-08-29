@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Favicon options — Syslog</title>
+<link rel="icon" type="image/svg+xml" href="terminal.svg">
+<style>
+:root{--bg:#0f1115;--panel:#171a21;--line:#262b36;--fg:#d7dce4;--muted:#8b93a3;--accent:#3b82f6}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.5 system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--fg);padding:28px 20px 60px}
+h1{font-size:18px;margin:0 0 4px}
+p.sub{color:var(--muted);margin:0 0 20px;font-size:13px}
+p.sub code, p.note code{background:#1d2330;padding:1px 5px;border-radius:4px;font-size:12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;max-width:1100px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;cursor:pointer;transition:border-color .15s,transform .1s}
+.card:hover{border-color:var(--accent);transform:translateY(-2px)}
+.card.active{border-color:var(--accent);box-shadow:0 0 0 2px rgba(59,130,246,.25)}
+.preview{display:flex;align-items:center;justify-content:center;height:100px;background:#0f1115;border:1px solid var(--line);border-radius:8px;margin-bottom:12px}
+.preview svg{width:58px;height:58px}
+.card h3{margin:0 0 2px;font-size:14px}
+.card p{margin:0;color:var(--muted);font-size:12px}
+.card code{display:block;margin-top:10px;font-size:11px;color:var(--muted);background:#0f1115;border:1px solid var(--line);border-radius:6px;padding:6px 8px;word-break:break-all;white-space:pre-wrap}
+.note{margin-top:18px;max-width:1100px;font-size:12px;color:var(--muted)}
+#status{color:var(--accent);font-weight:600}
+</style>
+</head>
+<body>
+<h1>Favicon options for the Syslog page</h1>
+<p class="sub">Click any icon to preview it live in this browser tab. Current: <span id="status">terminal</span></p>
+
+<div class="grid">
+
+  <div class="card active" data-name="terminal" onclick="pick(this)">
+    <div class="preview"><svg viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#171a21"/><rect x="13" y="13" width="38" height="38" rx="7" fill="#0f1115" stroke="#2a3140" stroke-width="2"/><circle cx="19.5" cy="19.5" r="2.5" fill="#ef4444"/><circle cx="27.5" cy="19.5" r="2.5" fill="#d97706"/><circle cx="35.5" cy="19.5" r="2.5" fill="#22c55e"/><rect x="18" y="27" width="20" height="3.5" rx="1.75" fill="#4b5563"/><rect x="18" y="34.5" width="28" height="3.5" rx="1.75" fill="#3b82f6"/><rect x="18" y="42" width="16" height="3.5" rx="1.75" fill="#8b93a3"/></svg></div>
+    <h3>Terminal window</h3>
+    <p>Log window with traffic-light dots and message lines</p>
+    <code>&lt;link rel="icon" type="image/svg+xml" href="icons/terminal.svg"&gt;</code>
+  </div>
+
+  <div class="card" data-name="pager" onclick="pick(this)">
+    <div class="preview"><svg viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#171a21"/><rect x="26" y="10" width="4" height="10" rx="2" fill="#8b93a3"/><circle cx="28" cy="9" r="3.5" fill="#ef4444"/><rect x="12" y="18" width="40" height="30" rx="8" fill="#0f1115" stroke="#2a3140" stroke-width="2"/><rect x="17" y="23" width="30" height="15" rx="4" fill="#1d2939"/><rect x="20.5" y="27" width="20" height="3" rx="1.5" fill="#3b82f6"/><rect x="20.5" y="33" width="12" height="3" rx="1.5" fill="#4b5563"/><rect x="24" y="42" width="16" height="3" rx="1.5" fill="#8b93a3"/></svg></div>
+    <h3>Beep-beep pager</h3>
+    <p>Classic pager with antenna — matches the 📟 header</p>
+    <code>&lt;link rel="icon" type="image/svg+xml" href="icons/pager.svg"&gt;</code>
+  </div>
+
+  <div class="card" data-name="rack" onclick="pick(this)">
+    <div class="preview"><svg viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#171a21"/><rect x="14" y="11" width="36" height="42" rx="5" fill="#0f1115" stroke="#2a3140" stroke-width="2"/><rect x="18" y="15" width="28" height="9" rx="3" fill="#1d2939"/><rect x="22" y="17.5" width="11" height="4" rx="2" fill="#3b82f6"/><circle cx="41" cy="19.5" r="2" fill="#22c55e"/><rect x="18" y="27.5" width="28" height="9" rx="3" fill="#1d2939"/><rect x="22" y="30" width="15" height="4" rx="2" fill="#4b5563"/><circle cx="41" cy="32" r="2" fill="#8b93a3"/><rect x="18" y="40" width="28" height="9" rx="3" fill="#1d2939"/><rect x="22" y="42.5" width="8" height="4" rx="2" fill="#4b5563"/><circle cx="41" cy="44.5" r="2" fill="#8b93a3"/></svg></div>
+    <h3>Server rack</h3>
+    <p>3-unit rack — fits the Proxmox/LXC server story</p>
+    <code>&lt;link rel="icon" type="image/svg+xml" href="icons/rack.svg"&gt;</code>
+  </div>
+
+  <div class="card" data-name="prompt" onclick="pick(this)">
+    <div class="preview"><svg viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#3b82f6"/><path d="M20 18 L37 32 L20 46" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/><rect x="40" y="40" width="9" height="6" rx="2" fill="#fff"/></svg></div>
+    <h3>Terminal prompt</h3>
+    <p>Bold blue square with a `&gt;_` prompt and cursor</p>
+    <code>&lt;link rel="icon" type="image/svg+xml" href="icons/prompt.svg"&gt;</code>
+  </div>
+
+  <div class="card" data-name="pulse" onclick="pick(this)">
+    <div class="preview"><svg viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#171a21"/><rect x="13" y="15" width="38" height="4" rx="2" fill="#2a3140"/><rect x="13" y="25" width="30" height="4" rx="2" fill="#2a3140"/><rect x="13" y="35" width="36" height="4" rx="2" fill="#2a3140"/><path d="M13 46 L22 46 L26 40 L31 52 L35 44 L39 46 L51 46" fill="none" stroke="#3b82f6" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    <h3>Log stream pulse</h3>
+    <p>Faint log lines with a live-signal pulse across them</p>
+    <code>&lt;link rel="icon" type="image/svg+xml" href="icons/pulse.svg"&gt;</code>
+  </div>
+
+  <div class="card" data-name="logfile" onclick="pick(this)">
+    <div class="preview"><svg viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#171a21"/><path d="M17 11 H38 L49 22 V53 H17 Z" fill="#0f1115" stroke="#2a3140" stroke-width="2"/><path d="M38 11 V22 H49 Z" fill="#2a3140"/><rect x="22" y="28" width="20" height="4" rx="2" fill="#3b82f6"/><rect x="22" y="36" width="24" height="4" rx="2" fill="#4b5563"/><rect x="22" y="44" width="15" height="4" rx="2" fill="#4b5563"/></svg></div>
+    <h3>Log file</h3>
+    <p>Document with folded corner and log lines</p>
+    <code>&lt;link rel="icon" type="image/svg+xml" href="icons/logfile.svg"&gt;</code>
+  </div>
+
+</div>
+
+<p class="note">Tip: SVG favicons stay crisp at any size and work in all modern browsers. Colors reuse your page palette — accent <code>#3b82f6</code>, panels <code>#171a21</code>/<code>#0f1115</code>. Just swap <code>href</code> in <code>index.html</code> to pick one.</p>
+
+<script>
+function pick(card){
+  document.querySelectorAll('.card').forEach(function(c){ c.classList.remove('active'); });
+  card.classList.add('active');
+  var svg = card.querySelector('.preview svg').cloneNode(true);
+  svg.setAttribute('xmlns','http://www.w3.org/2000/svg');
+  var xml = new XMLSerializer().serializeToString(svg);
+  var url = URL.createObjectURL(new Blob([xml], { type: 'image/svg+xml' }));
+  var link = document.querySelector('link[rel="icon"]');
+  if(!link){ link = document.createElement('link'); link.rel = 'icon'; document.head.appendChild(link); }
+  link.href = url;
+  document.getElementById('status').textContent = card.dataset.name;
+}
+</script>
+</body>
+</html>
