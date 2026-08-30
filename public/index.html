@@ -55,6 +55,15 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
 .host-row .hint{color:var(--muted);font-size:11px;white-space:nowrap}
 .backup-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #1b202a;flex-wrap:wrap}
 .backup-row .hint{color:var(--muted);font-size:11px}
+.alert-row{display:flex;flex-direction:column;gap:8px;padding:10px 0;border-bottom:1px solid #1b202a}
+.alert-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.alert-top input[type=text]{flex:0 0 140px;min-width:0;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:5px;padding:5px 8px}
+.alert-row input[type=url]{background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:5px;padding:5px 8px;width:100%}
+.alert-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+.alert-fields label{display:flex;flex-direction:column;gap:3px;color:var(--muted);font-size:11px}
+.alert-fields input,.alert-fields select{background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:5px;padding:4px 6px;width:100%}
+.alert-actions{display:flex;gap:6px;align-items:center}
+#live{font-size:11px;font-weight:600;color:#22c55e}
 .muted{color:var(--muted)}
 
 /* ---------- tablet / narrow screens ---------- */
@@ -105,9 +114,12 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
   <span id="status" class="muted">…</span>
   <span id="hosts" class="muted" title="Known syslog sources">…</span>
   <span id="ver" class="muted" title="Server version">…</span>
+  <span id="auth" class="muted" style="display:none;font-size:11px" title="HTTP Basic Auth enabled">🔒</span>
   <span id="disk" class="muted" title="Disk space left on the server">💾 …</span>
   <div style="flex:1"></div>
+  <span id="live" style="display:none" title="Live stream connected">🔴 LIVE</span>
   <label class="muted"><input type="checkbox" id="autorefresh" checked> auto</label>
+  <button id="alertsBtn" title="Alert rules (webhook)">🔔</button>
   <button id="backupsBtn" title="Manage backups">🗄</button>
   <button id="updateBtn" title="Update from GitHub (backs up, downloads latest, restarts)">⬆ Update</button>
   <button id="refresh">Refresh</button>
@@ -173,6 +185,18 @@ td{padding:4px 10px;border-bottom:1px solid #1b202a;vertical-align:top}tr:hover 
     <div class="modal-footer muted">Restore copies the files back and restarts the service · Delete is permanent</div>
   </div>
 </div>
+<div class="modal-overlay" id="alertsModal" style="display:none">
+  <div class="modal">
+    <div class="modal-header">🔔 Alert rules — webhook when logs match
+      <button id="closeAlerts">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="alertsList"></div>
+      <button id="addAlert">+ Add rule</button>
+    </div>
+    <div class="modal-footer muted">min severity = lowest level to fire ("err" also fires on emerg/alert/crit) · cooldown = min sec between alerts · kinds: Discord (content), Telegram (chat_id= in URL), generic JSON {text,…}</div>
+  </div>
+</div>
 <script>
 const $ = (s) => document.querySelector(s);
 let current = 'all', timer = null, daysData = [], sevFilter = '';
@@ -219,6 +243,64 @@ function filterHost(host) {
   refresh();
 }
 
+function rowHtml(e) {
+  return `
+    <tr>
+      <td class="muted">${new Date(e.ts).toLocaleString()}</td>
+      <td><a href="#" class="hostlink" data-host="${esc(e.host)}" title="Filter by this host" onclick="event.preventDefault();filterHost(this.dataset.host)">${esc(e.host)}</a></td>
+      <td><span class="sev ${e.severity}">${e.severity}</span></td>
+      <td class="muted">${esc(e.tag)}</td>
+      <td class="msg">${esc(e.msg)}</td>
+      <td><button class="del danger" onclick="delEntry('${e.date || e.ts.slice(0, 10)}','${e.id}')">✕</button></td>
+    </tr>`;
+}
+
+// ---- live stream (SSE) ----
+let sse = null, liveOn = true, sseOk = false, dayBump = false;
+function matchesFilters(e) {
+  if (current && current !== 'all' && e.date !== current) return false;
+  if (sevFilter) { const allowed = sevFilter.split(','); if (!allowed.includes(e.severity)) return false; }
+  if ($('#host').value && e.host !== $('#host').value) return false;
+  const q = $('#q').value.trim().toLowerCase();
+  if (q && !(e.msg.toLowerCase().includes(q) || e.tag.toLowerCase().includes(q))) return false;
+  return true;
+}
+function bumpDays() {
+  if (dayBump) return;
+  dayBump = true;
+  setTimeout(() => { dayBump = false; loadDays(); }, 2000);
+}
+function bumpTotal() {
+  const el = $('#total');
+  const m = el.textContent.match(/^([\d,.]+)/);
+  if (m) el.textContent = el.textContent.replace(m[1], (Number(m[1].replace(/,/g, '')) + 1).toLocaleString());
+}
+function prependRow(e) {
+  const tbody = $('#rows');
+  const onlyEmpty = tbody.children.length === 1 && tbody.querySelector('td.muted');
+  if (onlyEmpty) { tbody.innerHTML = rowHtml(e); bumpTotal(); return; }
+  if ($('#order').value === 'asc') tbody.insertAdjacentHTML('beforeend', rowHtml(e));
+  else { tbody.insertAdjacentHTML('afterbegin', rowHtml(e)); while (tbody.children.length > 501) tbody.lastElementChild.remove(); }
+  bumpTotal();
+}
+function setLiveBadge(on) {
+  const el = $('#live');
+  el.style.display = on ? 'inline' : 'none';
+  el.textContent = on ? '🔴 LIVE' : '';
+}
+function connectLive() {
+  if (!liveOn || sse) return;
+  sse = new EventSource('/api/stream');
+  sse.onopen = () => { sseOk = true; setLiveBadge(true); };
+  sse.onerror = () => { sseOk = false; setLiveBadge(false); }; // EventSource auto-reconnects
+  sse.addEventListener('log', (ev) => {
+    let e; try { e = JSON.parse(ev.data); } catch { return; }
+    if (matchesFilters(e)) prependRow(e);
+    bumpDays();
+  });
+}
+function disconnectLive() { if (sse) { sse.close(); sse = null; } sseOk = false; setLiveBadge(false); }
+
 function refresh() {
   if (!current) {
     $('#rows').innerHTML = '<tr><td colspan="6" class="muted">select a day</td></tr>';
@@ -239,15 +321,7 @@ function refresh() {
       const day = daysData.find((d) => d.date === current);
       $('#total').textContent = day ? `${total} entries · ${fmtSize(day.size)}` : `${total} entries`;
     }
-    $('#rows').innerHTML = logs.map((e) => `
-      <tr>
-        <td class="muted">${new Date(e.ts).toLocaleString()}</td>
-        <td><a href="#" class="hostlink" data-host="${esc(e.host)}" title="Filter by this host" onclick="event.preventDefault();filterHost(this.dataset.host)">${esc(e.host)}</a></td>
-        <td><span class="sev ${e.severity}">${e.severity}</span></td>
-        <td class="muted">${esc(e.tag)}</td>
-        <td class="msg">${esc(e.msg)}</td>
-        <td><button class="del danger" onclick="delEntry('${e.ts.slice(0, 10)}','${e.id}')">✕</button></td>
-      </tr>`).join('') || '<tr><td colspan="6" class="muted">no matching entries</td></tr>';
+    $('#rows').innerHTML = logs.map(rowHtml).join('') || '<tr><td colspan="6" class="muted">no matching entries</td></tr>';
   }).catch(() => {});
 }
 
@@ -271,7 +345,14 @@ $('#export').onclick = () => {
 };
 $('#autorefresh').onchange = () => {
   clearInterval(timer);
-  if ($('#autorefresh').checked) timer = setInterval(() => { loadDays(); refresh(); }, 5000);
+  if ($('#autorefresh').checked) {
+    liveOn = true;
+    connectLive();
+    timer = setInterval(() => { loadDays(); checkHealth(); loadHosts(); loadDisk(); refresh(); }, 5000);
+  } else {
+    liveOn = false;
+    disconnectLive();
+  }
 };
 ['#q', '#host', '#order'].forEach((s) => $(s).addEventListener('input', refresh));
 $('#chips').addEventListener('click', (e) => {
@@ -294,7 +375,11 @@ function setStatus(ok) {
 function checkHealth() {
   fetch('/api/health', { cache: 'no-store' })
     .then((r) => r.ok ? r.json() : Promise.reject())
-    .then((h) => { setStatus(h.ok !== false); $('#ver').textContent = h.version ? 'v' + h.version : ''; })
+    .then((h) => {
+      setStatus(h.ok !== false);
+      $('#ver').textContent = h.version ? 'v' + h.version : '';
+      $('#auth').style.display = h.auth ? 'inline' : 'none';
+    })
     .catch(() => setStatus(false));
 }
 function loadDisk() {
@@ -443,11 +528,95 @@ $('#backupsList').addEventListener('click', (e) => {
   }
 });
 
+// ---- alert rules modal ----
+function alertRowHtml(r) {
+  return `
+  <div class="alert-row" data-id="${esc(r.id || '')}">
+    <div class="alert-top">
+      <label class="host-ping"><input type="checkbox" data-enabled ${r.enabled !== false ? 'checked' : ''}> on</label>
+      <input type="text" data-name placeholder="Rule name" value="${esc(r.name || '')}">
+      <select data-kind>
+        ${['generic', 'discord', 'telegram'].map((k) => `<option value="${k}" ${r.webhookKind === k ? 'selected' : ''}>${k}</option>`).join('')}
+      </select>
+      <span style="flex:1"></span>
+      <div class="alert-actions">
+        <button data-action="test" title="Send a test webhook">Test</button>
+        <button data-action="save">Save</button>
+        <button data-action="delete" class="danger">Delete</button>
+      </div>
+    </div>
+    <input type="url" data-webhook placeholder="https://… webhook URL" value="${esc(r.webhook || '')}">
+    <div class="alert-fields">
+      <label>min severity<input type="text" data-minsev placeholder="err" value="${esc(r.minSeverity || '')}"></label>
+      <label>host (empty=any)<input type="text" data-host placeholder="" value="${esc(r.host || '')}"></label>
+      <label>tag (empty=any)<input type="text" data-tag placeholder="" value="${esc(r.tag || '')}"></label>
+      <label>message regex<input type="text" data-pattern placeholder="e.g. failed" value="${esc(r.msgPattern || '')}"></label>
+      <label>cooldown (sec)<input type="number" data-cooldown min="0" value="${Number(r.cooldownSec) || 0}"></label>
+    </div>
+  </div>`;
+}
+function readAlertRow(row) {
+  return {
+    id: row.dataset.id || undefined,
+    enabled: row.querySelector('[data-enabled]').checked,
+    name: row.querySelector('[data-name]').value.trim(),
+    webhookKind: row.querySelector('[data-kind]').value,
+    webhook: row.querySelector('[data-webhook]').value.trim(),
+    minSeverity: row.querySelector('[data-minsev]').value.trim() || 'err',
+    host: row.querySelector('[data-host]').value.trim(),
+    tag: row.querySelector('[data-tag]').value.trim(),
+    msgPattern: row.querySelector('[data-pattern]').value.trim(),
+    cooldownSec: Math.max(0, Number(row.querySelector('[data-cooldown]').value) || 0),
+  };
+}
+function openAlertsModal() {
+  const modal = $('#alertsModal');
+  modal.style.display = 'flex';
+  fetch('/api/alerts', { cache: 'no-store' })
+    .then((r) => r.ok ? r.json() : Promise.reject())
+    .then(({ alerts }) => {
+      $('#alertsList').innerHTML = (alerts || []).map(alertRowHtml).join('') || '<div class="muted">no rules yet — add one below</div>';
+    })
+    .catch(() => { $('#alertsList').innerHTML = '<div class="muted">unreachable</div>'; });
+}
+$('#alertsBtn').onclick = openAlertsModal;
+$('#closeAlerts').onclick = () => { $('#alertsModal').style.display = 'none'; };
+$('#alertsModal').addEventListener('click', (e) => {
+  if (e.target === $('#alertsModal')) $('#alertsModal').style.display = 'none';
+});
+$('#addAlert').onclick = () => {
+  const div = document.createElement('div');
+  div.innerHTML = alertRowHtml({ id: '', name: '', webhookKind: 'generic', webhook: '', minSeverity: 'err', host: '', tag: '', msgPattern: '', cooldownSec: 60, enabled: true });
+  $('#alertsList').insertAdjacentElement('afterbegin', div.firstElementChild);
+};
+$('#alertsList').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-action]');
+  if (!btn) return;
+  const row = btn.closest('.alert-row');
+  if (btn.dataset.action === 'delete') {
+    const id = row.dataset.id;
+    if (!id) { row.remove(); return; }
+    if (!confirm('Delete this rule?')) return;
+    fetch('/api/alerts?id=' + encodeURIComponent(id), { method: 'DELETE' })
+      .then((r) => r.ok ? openAlertsModal() : alert('Delete failed'));
+  } else if (btn.dataset.action === 'test') {
+    const rule = readAlertRow(row);
+    fetch('/api/alerts/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rule }) })
+      .then((r) => r.ok ? alert('Test webhook sent — check your chat!') : alert('Test failed'));
+  } else if (btn.dataset.action === 'save') {
+    const rule = readAlertRow(row);
+    if (!rule.webhook) { alert('Webhook URL is required'); return; }
+    fetch('/api/alerts', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(rule) })
+      .then((r) => r.ok ? openAlertsModal() : alert('Save failed'));
+  }
+});
+
 checkHealth();
 loadHosts();
 loadHostFilter();
 loadDisk();
 loadDays();
+connectLive();
 timer = setInterval(() => { loadDays(); refresh(); checkHealth(); loadHosts(); loadDisk(); }, 5000);
 setInterval(() => { loadHostFilter(); }, 30000);
 </script>

@@ -5,6 +5,8 @@
 //  - SQLite storage (built-in node:sqlite) in one DB file: <SYSLOG_LOG_DIR>/syslog.db
 //  - web GUI + REST API on port 8080 (single static file in ./public)
 //  - per-day and per-entry delete, optional retention sweep
+//  - live stream (SSE) to the GUI + alert rules with webhook (Discord/Telegram/generic)
+//  - optional Basic Auth for the GUI + API (SYSLOG_USERNAME / SYSLOG_PASSWORD)
 //  - requires Node.js >= 22.5 for node:sqlite (recommended: Node 24 LTS)
 //
 // Env vars:
@@ -15,6 +17,8 @@
 //   SYSLOG_HTTP_PORT   default 8080
 //   SYSLOG_LOG_DIR     default ./logs  (holds syslog.db + hosts.json)
 //   SYSLOG_RETENTION   auto-delete days older than N (0 = keep all)
+//   SYSLOG_USERNAME / SYSLOG_PASSWORD   enable Basic Auth on GUI + API (both required)
+//   SYSLOG_ALERTS_FILE alert rules JSON (default <LOG_DIR>/alerts.json)
 const http      = require('http');
 const dgram     = require('dgram');
 const net       = require('net');
@@ -26,7 +30,7 @@ const crypto    = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 const { execFile, exec } = require('child_process');
 
-const VERSION = '1.5.0'; // bump on every release; shown in the GUI header
+const VERSION = '1.6.0'; // bump on every release; shown in the GUI header
 
 const HOST      = process.env.SYSLOG_HOST       || '0.0.0.0';
 const UDP_PORT  = Number(process.env.SYSLOG_UDP_PORT  || 514);
@@ -36,6 +40,13 @@ const HTTP_PORT = Number(process.env.SYSLOG_HTTP_PORT || 8080);
 const LOG_DIR   = process.env.SYSLOG_LOG_DIR || path.join(__dirname, 'logs');
 const PUBLIC    = path.join(__dirname, 'public');
 const RETENTION = Number(process.env.SYSLOG_RETENTION || 0); // days, 0 = keep all
+
+// ---------- optional HTTP Basic Auth (GUI + API + SSE) ----------
+const AUTH_USER = process.env.SYSLOG_USERNAME || '';
+const AUTH_PASS = process.env.SYSLOG_PASSWORD || '';
+const AUTH_ENABLED = !!(AUTH_USER && AUTH_PASS);
+const AUTH_REALM = 'syslog';
+const authExpected = AUTH_ENABLED ? Buffer.from(`${AUTH_USER}:${AUTH_PASS}`) : null;
 
 fs.mkdirSync(LOG_DIR, { recursive: true });
 
@@ -251,9 +262,96 @@ async function hostsInLogs() {
 function store(entry, rinfo) {
   noteHost(entry.host, rinfo);
   const t = new Date(entry.ts).getTime();
+  const tsMs = Number.isFinite(t) ? t : Date.now();
+  const d = dateStr(new Date(tsMs));
+  let id = null;
   try {
-    insertLog.run(Number.isFinite(t) ? t : Date.now(), dateStr(new Date(t)), entry.host, entry.facility, entry.severity, entry.tag, entry.msg);
+    const info = insertLog.run(tsMs, d, entry.host, entry.facility, entry.severity, entry.tag, entry.msg);
+    id = info.lastInsertRowid;
   } catch (e) { console.error('store failed:', e); }
+  const row = { id, ts: entry.ts, date: d, host: entry.host, facility: entry.facility, severity: entry.severity, tag: entry.tag, msg: entry.msg };
+  sseBroadcast(row);
+  checkAlerts(row);
+}
+
+// ---------- live stream (SSE) ----------
+const sseClients = new Set();
+const SSE_MAX = Number(process.env.SYSLOG_SSE_MAX || 50);
+
+function sseBroadcast(data) {
+  const payload = `event: log\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const res of sseClients) { try { res.write(payload); } catch {} }
+}
+
+function handleStream(res) {
+  if (sseClients.size >= SSE_MAX) { res.writeHead(503); return res.end('busy'); }
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write('retry: 3000\n\n');
+  res.write(`event: hello\ndata: ${JSON.stringify({ ok: true, version: VERSION })}\n\n`);
+  sseClients.add(res);
+  const hb = setInterval(() => { try { res.write(': ping\n\n'); } catch {} }, 25000);
+  const drop = () => { clearInterval(hb); sseClients.delete(res); };
+  res.on('close', drop);
+  res.on('error', drop);
+}
+
+// ---------- alert rules (webhook) ----------
+const ALERTS_FILE = process.env.SYSLOG_ALERTS_FILE || path.join(LOG_DIR, 'alerts.json');
+let alertRules = [];
+const alertCooldowns = new Map(); // rule.id -> last fired ms
+
+function loadAlerts() {
+  try { alertRules = JSON.parse(fs.readFileSync(ALERTS_FILE, 'utf8')); } catch {}
+  if (!Array.isArray(alertRules)) alertRules = [];
+}
+function saveAlerts() { try { fs.writeFileSync(ALERTS_FILE, JSON.stringify(alertRules, null, 2)); } catch {} }
+const newRuleId = () => crypto.randomBytes(6).toString('hex');
+
+const sevIndex = (sev) => { const i = SEVERITIES.indexOf(sev); return i === -1 ? 7 : i; };
+
+function matchRule(rule, e) {
+  if (rule.enabled === false) return false;
+  if (rule.minSeverity && sevIndex(e.severity) > sevIndex(rule.minSeverity)) return false;
+  if (rule.host && e.host !== rule.host) return false;
+  if (rule.tag && e.tag !== rule.tag) return false;
+  if (rule.msgPattern) { try { if (!new RegExp(rule.msgPattern).test(e.msg)) return false; } catch { return false; } }
+  return true;
+}
+
+async function sendAlert(rule, e) {
+  const ts = new Date(e.ts).toLocaleString();
+  const text = `🚨 [${rule.name || 'syslog'}] ${e.host} ${e.facility}.${e.severity} ${e.tag}: ${e.msg} (${ts})`;
+  const kind = (rule.webhookKind || 'generic').toLowerCase();
+  let url = rule.webhook || '';
+  let body;
+  try {
+    if (kind === 'discord') body = JSON.stringify({ content: text });
+    else if (kind === 'telegram') {
+      const u = new URL(url);
+      const chatId = u.searchParams.get('chat_id');
+      u.searchParams.delete('chat_id');
+      url = u.toString();
+      body = JSON.stringify({ chat_id: chatId || undefined, text });
+    } else body = JSON.stringify({ text, host: e.host, severity: e.severity, tag: e.tag, msg: e.msg, ts: e.ts, rule: rule.name || 'syslog' });
+    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, signal: AbortSignal.timeout(10000) });
+    if (!res.ok) console.error(`[alerts] ${rule.name || rule.id}: webhook HTTP ${res.status}`);
+  } catch (err) { console.error(`[alerts] ${rule.name || rule.id}:`, err.message); }
+}
+
+function checkAlerts(e) {
+  for (const rule of alertRules) {
+    if (!matchRule(rule, e)) continue;
+    const cooldownMs = Math.max(Number(rule.cooldownSec) || 0, 0) * 1000;
+    const now = Date.now();
+    if (cooldownMs && (alertCooldowns.get(rule.id) || 0) + cooldownMs > now) continue;
+    alertCooldowns.set(rule.id, now);
+    sendAlert(rule, e);
+  }
 }
 
 // ---------- receivers ----------
@@ -281,6 +379,22 @@ const sendJSON = (res, code, obj) => {
   res.writeHead(code, { 'Content-Type': 'application/json' });
   res.end(b);
 };
+
+function authOk(req) {
+  if (!AUTH_ENABLED) return true;
+  const m = (req.headers.authorization || '').match(/^Basic\s+(.+)$/i);
+  if (!m) return false;
+  let got;
+  try { got = Buffer.from(m[1], 'base64'); } catch { return false; }
+  const a = Buffer.from(authExpected);
+  const b = got.length === a.length ? got : Buffer.alloc(a.length);
+  return got.length === a.length && crypto.timingSafeEqual(a, b);
+}
+
+function send401(res) {
+  res.writeHead(401, { 'Content-Type': 'application/json', 'WWW-Authenticate': `Basic realm="${AUTH_REALM}"` });
+  res.end(JSON.stringify({ error: 'unauthorized' }));
+}
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -412,7 +526,9 @@ function backupDb(dir) {
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   const p = url.pathname, s = url.searchParams;
+  if (!authOk(req)) return send401(res);
   try {
+    if (p === '/api/stream' && req.method === 'GET') return handleStream(res);
     if (p === '/api/days') {
       const days = daysList().sort((a, b) => b.date.localeCompare(a.date));
       return sendJSON(res, 200, { days });
@@ -444,7 +560,7 @@ http.createServer(async (req, res) => {
       const ok = await deleteEntry(s.get('date'), s.get('id'));
       return sendJSON(res, ok ? 200 : 404, ok ? { ok: true } : { error: 'not found' });
     }
-    if (p === '/api/health') return sendJSON(res, 200, { ok: true, uptime: process.uptime(), version: VERSION });
+    if (p === '/api/health') return sendJSON(res, 200, { ok: true, uptime: process.uptime(), version: VERSION, auth: AUTH_ENABLED });
     if (p === '/api/disk') {
       let total = 0, free = 0;
       try { const s = fs.statfsSync(LOG_DIR); total = s.blocks * s.bsize; free = s.bavail * s.bsize; } catch (e) {}
@@ -469,6 +585,34 @@ http.createServer(async (req, res) => {
       else hostConfigs.set(body.host, { onlineMs: onlineMs || null, pingMs: pingMs || null, ping });
       saveHostConfigs();
       return sendJSON(res, 200, { ok: true, host: body.host, onlineMs: onlineMs || null, pingMs: pingMs || null, ping });
+    }
+    if (p === '/api/alerts' && req.method === 'GET') return sendJSON(res, 200, { alerts: alertRules });
+    if (p === '/api/alerts' && req.method === 'PUT') {
+      const body = await readBody(req);
+      if (!body.webhook) return sendJSON(res, 400, { error: 'webhook URL required' });
+      if (body.id) {
+        const idx = alertRules.findIndex((r) => r.id === body.id);
+        if (idx === -1) return sendJSON(res, 404, { error: 'rule not found' });
+        alertRules[idx] = { ...alertRules[idx], ...body };
+      } else {
+        alertRules.push({ id: newRuleId(), enabled: true, minSeverity: 'err', host: '', tag: '', msgPattern: '', cooldownSec: 60, webhookKind: 'generic', ...body });
+      }
+      saveAlerts();
+      return sendJSON(res, 200, { ok: true, alerts: alertRules });
+    }
+    if (p === '/api/alerts' && req.method === 'DELETE') {
+      const id = s.get('id');
+      alertRules = alertRules.filter((r) => r.id !== id);
+      saveAlerts();
+      return sendJSON(res, 200, { ok: true });
+    }
+    if (p === '/api/alerts/test' && req.method === 'POST') {
+      const body = await readBody(req);
+      const r = body.rule || {};
+      sendAlert({ id: 'test', enabled: true, name: r.name || 'test', minSeverity: r.minSeverity || 'err', host: r.host || '', tag: r.tag || '', msgPattern: r.msgPattern || '', webhookKind: r.webhookKind || 'generic', webhook: r.webhook }, {
+        ts: new Date().toISOString(), date: dateStr(), host: os.hostname() || 'syslog', facility: 'syslog', severity: 'err', tag: 'alert-test', msg: 'Test webhook from the syslog server',
+      });
+      return sendJSON(res, 200, { ok: true });
     }
     if (p === '/api/backups' && req.method === 'GET') {
       return sendJSON(res, 200, { backups: listBackups(), keep: backupKeep });
@@ -543,6 +687,7 @@ http.createServer(async (req, res) => {
 });
 
 loadHostConfigs();
+loadAlerts();
 loadSettings();
 if (PING_ENABLED) {
   pingLoop().catch(() => {});

@@ -5,6 +5,9 @@ Small, light syslog server designed to run in an LXC container on Proxmox.
 - UDP + TCP syslog receivers (port 514), RFC 3164 + RFC 5424
 - One SQLite database file: `logs/syslog.db` (built-in `node:sqlite`, no npm deps)
 - Fast web GUI + REST API (port 8080), single static file
+- **Live view** — new log entries stream to the GUI instantly over SSE (no polling)
+- **Alert rules** — webhook (Discord / Telegram / generic) when logs match severity/host/tag/regex
+- **Optional Basic Auth** — protect the GUI + API with `SYSLOG_USERNAME`/`SYSLOG_PASSWORD`
 - Delete a whole day **or** individual log entries from the GUI
 - Optional retention: auto-purge days older than N
 - **No dependencies** — Node.js built-ins only, no `npm install`
@@ -38,6 +41,8 @@ logger -n 127.0.0.1 -T -P 514 -p user.warning "tcp test"
 | `SYSLOG_LOG_DIR`    | `./logs`    | Storage dir — holds `syslog.db` (SQLite)       |
 | `SYSLOG_RETENTION`  | `0`         | Auto-delete days older than N (0 = keep all)   |
 | `SYSLOG_DISK_WARN_PCT` | `5`      | Log an `err` entry when free disk drops below N% |
+| `SYSLOG_USERNAME` / `SYSLOG_PASSWORD` | *(off)* | Enable **Basic Auth** on the GUI + API (set both) |
+| `SYSLOG_ALERTS_FILE` | `<LOG_DIR>/alerts.json` | Where alert rules are stored |
 
 ## REST API
 
@@ -46,9 +51,14 @@ logger -n 127.0.0.1 -T -P 514 -p user.warning "tcp test"
 | GET    | `/api/days`                   | List days with entry counts          |
 | GET    | `/api/logs?date=YYYY-MM-DD&q=…&host=…&severity=…&limit=500&offset=0` | Query a day |
 | GET    | `/api/export?date=YYYY-MM-DD&q=…&host=…&severity=…` | Download a day as CSV (Excel-ready) |
+| GET    | `/api/stream`                | **Live SSE** — streams new entries as `log` events |
+| GET    | `/api/alerts`                | List alert rules                      |
+| PUT    | `/api/alerts`                | Create or update an alert rule (body = rule) |
+| DELETE | `/api/alerts?id=…`           | Delete an alert rule                  |
+| POST   | `/api/alerts/test`           | Send a test webhook through a rule    |
 | DELETE | `/api/logs?date=YYYY-MM-DD`   | Delete a whole day's logs             |
 | DELETE | `/api/entry?date=YYYY-MM-DD&id=…` | Delete one entry                 |
-| GET    | `/api/health`                 | Liveness check                       |
+| GET    | `/api/health`                 | Liveness check (also reports `auth`)  |
 
 ## Deploy on a Proxmox LXC (Debian 12)
 
@@ -140,6 +150,31 @@ Firewall: allow UDP/TCP 514 (and 8080, or bind the GUI to `127.0.0.1` and SSH-tu
   destination d_syslog { network("192.168.1.50" port(514) transport("udp")); };
   log { source(s_sys); destination(d_syslog); };
   ```
+
+## Alerts & auth
+
+**Basic Auth** — protect the GUI and API (both vars required):
+
+```bash
+SYSLOG_USERNAME=admin SYSLOG_PASSWORD='a-strong-password' node server.js
+```
+
+**Alert rules** — manage from the GUI (🔔 button) or the API. A rule matches on
+min severity, host, tag and/or a message regex, respects a cooldown, and POSTs a
+webhook:
+
+- `generic` — JSON `{ text, host, severity, tag, msg, ts, rule }` (Slack, Mattermost, …)
+- `discord` — JSON `{ content }` to a Discord webhook URL
+- `telegram` — send to `https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<id>`
+
+Example rule (curl):
+
+```bash
+curl -u admin:pass -X PUT http://host:8080/api/alerts -H 'Content-Type: application/json' -d '{
+  "name": "critical", "minSeverity": "crit", "cooldownSec": 300,
+  "webhookKind": "discord", "webhook": "https://discord.com/api/webhooks/…"
+}'
+```
 
 ## Notes
 
