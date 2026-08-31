@@ -30,7 +30,7 @@ const crypto    = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 const { execFile, exec } = require('child_process');
 
-const VERSION = '1.6.0'; // bump on every release; shown in the GUI header
+const VERSION = '1.6.1'; // bump on every release; shown in the GUI header
 
 const HOST      = process.env.SYSLOG_HOST       || '0.0.0.0';
 const UDP_PORT  = Number(process.env.SYSLOG_UDP_PORT  || 514);

@@ -334,14 +334,31 @@ $('#delAll').onclick = () => {
     current = ''; $('#rows').innerHTML = ''; loadDays(); refresh();
   }).catch((e) => alert('Delete failed: ' + e.message));
 };
-$('#export').onclick = () => {
+$('#export').onclick = async () => {
   if (!current) return;
   const qs = new URLSearchParams({ date: current });
   if ($('#q').value) qs.set('q', $('#q').value);
   if (sevFilter) qs.set('severity', sevFilter);
   if ($('#host').value) qs.set('host', $('#host').value);
   qs.set('order', $('#order').value);
-  window.location = '/api/export?' + qs;
+  // Fetch + Blob download instead of window.location navigation: full-page
+  // navigation to an attachment endpoint fails on Android (Chrome mobile /
+  // in-app WebViews render the CSV as text or drop the download).
+  try {
+    const r = await fetch('/api/export?' + qs);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'syslog-' + current + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  } catch (e) {
+    alert('Export failed: ' + e.message);
+  }
 };
 $('#autorefresh').onchange = () => {
   clearInterval(timer);
